@@ -1,5 +1,11 @@
 # jax-in-lean
 
+> [!WARNING]
+> This is just a vibe-coded toy experiment,
+> made as an excuse to play with Lean.
+
+[![Bug dashboard](https://img.shields.io/badge/%E2%9A%94%EF%B8%8F_Bug_dashboard_%F0%9F%9B%A1%EF%B8%8F-GitHub_Pages-blue)](https://adrhill.github.io/jax-in-lean/)
+
 A model of [JAX](https://github.com/jax-ml/jax) in [Lean 4](https://lean-lang.org), with machine-checked proofs about it.
 Sister repository of [asdex](https://github.com/adrhill/asdex).
 
