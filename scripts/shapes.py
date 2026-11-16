@@ -139,13 +139,12 @@ def jax_record(case):
     A result is `{"shape": [...]}`, `{"shapes": [[...], ...]}` or `{"error": "..."}`.
     The observation `primal` is always present.
     """
+    import jax
     import jax.numpy as jnp
+    from jax import lax
     from jax._src import config, core
     from jax._src.interpreters import ad
     from jax._src.lax import lax as L
-
-    import jax
-    from jax import lax
 
     prim, p = case
 

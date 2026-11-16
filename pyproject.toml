@@ -21,6 +21,10 @@ dev = [
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint.isort]
+# On case-insensitive file systems (macOS), `Jax/` would make `jax` first-party.
+known-third-party = ["jax"]
+
 [tool.ty.environment]
 # The scripts import each other; `bugs` would otherwise resolve to the `bugs/` records.
 root = ["scripts"]
