@@ -12,7 +12,9 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 ├── Core.lean       # Tensor, IsJvpOf, IsJvp₂Of, IsTransposeOf
 ├── Lax/Primal.lean # Primal semantics of every primitive, and helpers that rules call
 └── Lax/<Name>.lean # One file per lax primitive: differentiation rules and proofs
-scripts/audit.sh    # Forbidden-token scan + build
+bugs/<name>.json    # One record per JAX bug, with its reproducer
+scripts/audit.sh    # Forbidden-token scan, build, bug reproducers
+scripts/bugs.py     # Checks the bug records and runs their reproducers
 pyproject.toml      # Pins the modelled JAX version
 ```
 
@@ -56,6 +58,7 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 - Never weaken a statement to make it provable.
   If a property is false, prove its negation with a concrete counterexample and keep both the statement and the refutation.
 - A refutation is a JAX bug only with a Python reproducer that shows it on the pinned JAX.
+  Every bug gets a record `bugs/<name>.json` that follows `scripts/bug.schema.json`.
   If the model and real JAX disagree, the model is wrong: fix the model.
 - Theorem statements and model definitions are the trusted part and are reviewed by the user.
   Keep them short and readable, and point out new or changed ones when reporting work.

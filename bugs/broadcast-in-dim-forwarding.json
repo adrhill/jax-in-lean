@@ -1,0 +1,41 @@
+{
+  "$schema": "../scripts/bug.schema.json",
+  "title": "`broadcast_in_dim` ignores non-increasing `broadcast_dimensions` if the shape is unchanged",
+  "status": "found",
+  "primitive": "broadcast_in_dim",
+  "jax_version": "0.12.0.1",
+  "source": "jax/_src/lax/lax.py:7583",
+  "lean_refutation": null,
+  "upstream_issue": null,
+  "description": [
+    "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order,",
+    "and its docstring shows `broadcast_dimensions=(1, 0)` as an implicit transpose.",
+    "If the result shape equals the operand shape, the result is silently wrong:",
+    "JAX returns the operand unchanged instead of permuting its axes.",
+    "",
+    "`_broadcast_in_dim_fwd_rule` forwards the operand whenever `shape` equals the operand shape.",
+    "It does not check that `broadcast_dimensions` is the identity.",
+    "The equation is dropped from the jaxpr, also in eager mode and in derivatives.",
+    "",
+    "This is a bug of a forwarding rule and not of a differentiation rule, so the Lean model does not cover it."
+  ],
+  "reproducer": [
+    "import jax",
+    "import jax.numpy as jnp",
+    "import numpy as np",
+    "from jax import lax",
+    "",
+    "# `broadcast_in_dim` with `broadcast_dimensions=(1, 0)` is a transpose.",
+    "x = jnp.arange(6.0).reshape(3, 2)",
+    "np.testing.assert_array_equal(lax.broadcast_in_dim(x, (2, 3), (1, 0)), x.T)",
+    "",
+    "# For a square operand, JAX returns the operand instead of its transpose.",
+    "g = lambda x: lax.broadcast_in_dim(x, (2, 2), (1, 0))",
+    "y = jnp.array([[5.0, 6.0], [7.0, 8.0]])",
+    "np.testing.assert_array_equal(g(y), y)",
+    "assert not np.array_equal(g(y), y.T)",
+    "",
+    "# The equation is missing from the jaxpr.",
+    "assert len(jax.make_jaxpr(g)(y).eqns) == 0"
+  ]
+}

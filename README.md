@@ -14,7 +14,8 @@ mirror the source in Lean, state properties, and settle each one as proven or re
 | `Jax/Scalar.lean`, `Jax/Shape.lean`, `Jax/Core.lean` | Array entries, shapes, and what it means for a rule to be correct. |
 | `Jax/Lax/Primal.lean` | What each `lax` primitive computes. |
 | `Jax/Lax/<Name>.lean` | The differentiation rules of one primitive, with proofs. |
-| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, then builds. |
+| `bugs/` | The JAX bugs found so far, one JSON record each, with a reproducer. |
+| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, and runs the reproducers. |
 | `pyproject.toml` | Pins the JAX version being modelled. |
 
 ## Scope

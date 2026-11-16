@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JAX bug",
+  "description": "A bug in JAX found with the Lean model. The file name is the identifier of the bug.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "status", "primitive", "jax_version", "source", "lean_refutation", "upstream_issue", "description", "reproducer"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "title": {
+      "description": "One line that names the bug.",
+      "type": "string"
+    },
+    "status": {
+      "description": "found: the reproducer shows the bug. refuted: a Lean theorem refutes the rule. reported: an upstream issue exists. fixed: a JAX release contains a fix.",
+      "enum": ["found", "refuted", "reported", "fixed"]
+    },
+    "primitive": {
+      "description": "The lax primitive, as named in lax.",
+      "type": "string"
+    },
+    "jax_version": {
+      "description": "The JAX version on which the bug was found.",
+      "type": "string"
+    },
+    "source": {
+      "description": "The faulty code, as jax/_src/<file>.py:<line> of jax_version.",
+      "type": "string",
+      "pattern": "^jax/_src/.+\\.py:[0-9]+$"
+    },
+    "lean_refutation": {
+      "description": "The fully qualified name of the Lean theorem that refutes the rule, if the model covers it.",
+      "type": ["string", "null"]
+    },
+    "upstream_issue": {
+      "description": "The URL of the upstream issue.",
+      "type": ["string", "null"],
+      "format": "uri"
+    },
+    "fixed_in": {
+      "description": "The first JAX version that contains a fix.",
+      "type": "string"
+    },
+    "description": {
+      "description": "What is wrong and why, in Markdown, one line per array entry.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reproducer": {
+      "description": "A Python script, one line per array entry. It asserts the wrong behaviour, so it succeeds as long as the bug exists.",
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "refuted" } } }, "then": { "properties": { "lean_refutation": { "type": "string" } } } },
+    { "if": { "properties": { "status": { "enum": ["reported", "fixed"] } } }, "then": { "properties": { "upstream_issue": { "type": "string" } } } },
+    { "if": { "properties": { "status": { "const": "fixed" } } }, "then": { "required": ["fixed_in"] } }
+  ]
+}
