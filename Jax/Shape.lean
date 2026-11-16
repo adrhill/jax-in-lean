@@ -29,6 +29,14 @@ variable {m n : ℕ}
 /-- The index that keeps axis `e d` of `i` as its axis `d`. -/
 def Index.proj {s : Shape n} (e : Fin m → Fin n) (i : Index s) : Index (s ∘ e) := fun d => i (e d)
 
+/-- The shapes `s` and `t` have the same rank and the same sizes.
+Shapes are static, so this is `core.definitely_equal_shape`, `jax/_src/core.py:3205`:
+```
+  return (len(s1) == len(s2) and
+          all(unsafe_map(definitely_equal, s1, s2)))
+``` -/
+def definitelyEqualShape (s : Shape m) (t : Shape n) : Bool := List.ofFn s == List.ofFn t
+
 /-! ## Broadcasting -/
 
 /-- An array of shape `s` can be broadcast to shape `t`: every axis has size 1 or the size in `t`. -/

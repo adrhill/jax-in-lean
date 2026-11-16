@@ -5,10 +5,12 @@ public import Jax.Lax.Primal
 /-!
 # `broadcast_in_dim`
 
-Differentiation rules of the `broadcast_in_dim` primitive of `jax/_src/lax/lax.py`.
+Differentiation rules and the forwarding rule of the `broadcast_in_dim` primitive of `jax/_src/lax/lax.py`.
 
 The transpose rule is correct for increasing `broadcast_dimensions`,
 and returns an array of the wrong shape for `broadcast_dimensions = (1, 0)`.
+The forwarding rule is correct for increasing `broadcast_dimensions`,
+and forwards the operand instead of its transpose for `broadcast_dimensions = (1, 0)` and equal shapes.
 -/
 
 @[expose] public section
@@ -214,5 +216,55 @@ theorem broadcastInDimTranspose_not_correct :
   have h0 := hs ⟨0, by decide⟩
   rw [show Fin.cast hN ⟨0, _⟩ = (0 : Fin 2) from rfl] at h0
   exact absurd h0 (by decide)
+
+/-! ## Forwarding rule -/
+
+/-- The forwarding rule of `broadcast_in_dim`.
+It forwards the operand of shape `so` if `shape` equals `so`, whatever `broadcast_dimensions` is.
+Sharding is not modelled, so `eqn.params['sharding']` is `None`.
+`jax/_src/lax/lax.py:7583`:
+```
+def _broadcast_in_dim_fwd_rule(eqn):
+  v, = eqn.invars
+  if (core.definitely_equal_shape(eqn.params['shape'], v.aval.shape)
+      and (eqn.params['sharding'] is None or
+           eqn.params['sharding'] == v.aval.sharding)):
+    return [0], None
+  else:
+    return [None], eqn
+``` -/
+def broadcastInDimFwd (so : Shape m) (shape : Shape n) (_broadcastDimensions : Fin m → Fin n) :
+    Bool :=
+  definitelyEqualShape shape so
+
+/-- The forwarding rule of `broadcast_in_dim` is correct
+if `broadcast_dimensions` is strictly increasing. -/
+theorem broadcastInDimFwd_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
+    (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : StrictMono broadcastDimensions) :
+    IsFwdOf (broadcastInDimFwd so shape broadcastDimensions)
+      (broadcastInDim shape broadcastDimensions h hd.injective) := by
+  intro hf x
+  have hf' : List.ofFn shape = List.ofFn so := beq_iff_eq.1 hf
+  obtain rfl : n = m := by simpa using congrArg List.length hf'
+  obtain rfl := List.ofFn_injective hf'
+  obtain rfl := hd.eq_id
+  refine Tensor.Same.of_eq (funext fun j => congrArg x (Index.ext_val fun d => ?_))
+  rw [Index.unbroadcast_val]
+  split_ifs with h1
+  · have := (j d).isLt
+    omega
+  · rfl
+
+/-- The forwarding rule of `broadcast_in_dim` is wrong for `broadcast_dimensions = (1, 0)`:
+for an operand of shape `(2, 2)`, the result is its transpose, and the rule forwards the operand. -/
+theorem broadcastInDimFwd_not_correct :
+    ¬ IsFwdOf (broadcastInDimFwd ![2, 2] ![2, 2] ![1, 0])
+      (broadcastInDim (so := ![2, 2]) ![2, 2] ![1, 0] (by unfold BroadcastsTo; decide) (by decide)) := by
+  intro hf
+  -- The array `[[0, 1], [0, 1]]`, whose entry `(0, 1)` differs from the entry `(1, 0)`.
+  obtain ⟨_, _, he⟩ := hf (by decide) (ofReal fun i => ((i 1 : ℕ) : ℝ))
+  let i : Index (![2, 2] : Shape 2) := fun d => ⟨d, by fin_cases d <;> decide⟩
+  have := he i i fun _ => rfl
+  simp [i, ofReal, broadcastInDim, Index.proj, Index.unbroadcast] at this
 
 end Jax.Lax

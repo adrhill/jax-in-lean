@@ -108,6 +108,19 @@ def IsTransposeOf {s : Shape m} {s' : Shape m'} {t : Shape n}
     f (ofReal x) = ofReal y ∧ (tr (ofReal ct)).Same (ofReal u) ∧
     ∑ j, ct j * y j = ∑ i, u i * x i
 
+/-! ## Forwarding rules -/
+
+/-- `fwd` is a correct forwarding rule for the unary `f`:
+if `fwd` forwards the operand to the result, the operand is the result of `f`.
+
+A rule of `pe.forwarding_rules`, `jax/_src/interpreters/partial_eval.py:1648`,
+looks at the parameters and input shapes of an equation, not at the input values.
+For each output it returns the index of an input that replaces it, or `None`.
+For a unary primitive, `true` is `[0]` and `false` is `[None]`. -/
+def IsFwdOf {s : Shape m} {t : Shape n} (fwd : Bool) (f : Tensor (Index s) → Tensor (Index t)) :
+    Prop :=
+  fwd → ∀ x : Tensor (Index s), x.Same (f x)
+
 /-! ## Lemmas -/
 
 theorem ofReal_injective {ι : Type} : Function.Injective (ofReal (ι := ι)) :=

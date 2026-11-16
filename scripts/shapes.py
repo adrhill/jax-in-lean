@@ -266,6 +266,7 @@ def jax_record(case):
                     "broadcast_dimensions": tuple(p["bd"]),
                     "sharding": None,
                 }
+                rec["fwd"] = {"forwarded": not jax.make_jaxpr(f)(sds(s)).eqns}
             jvp = ad.primitive_jvps[primitive]
             tr = ad.primitive_transposes[primitive]
             rec["jvp"] = trace(lambda g, x: jvp((x,), (g,), **params)[1], s, s)
@@ -429,6 +430,16 @@ def lean_spec(prim, p):
     raise ValueError(prim)
 
 
+# Forwarding rules: the Lean term that is `true` if the rule replaces the equation by its operand.
+# JAX forwards exactly when the traced jaxpr has no equations.
+FWD = {
+    "broadcast_in_dim": lambda p: (
+        f"broadcastInDimFwd {lshape(p['so'])} {lshape(p['shape'])} "
+        f"(dims {len(p['shape'])} [{', '.join(map(str, p['bd']))}])"
+    ),
+}
+
+
 def fill(term, args):
     for i, (_, unfold) in enumerate(args):
         term = term.replace(f"PROOF{i}", by(*unfold))
@@ -544,6 +555,9 @@ def assertions(prim, p, rec):
         else:
             out.append((name, shape_eq(term, args, rec[name]["shape"]), "decide"))
             known[name] = rec[name]["shape"]
+    if "fwd" in rec:
+        forwarded = "true" if rec["fwd"]["forwarded"] else "false"
+        out.append(("fwd", f"{FWD[prim](p)} = {forwarded}", "decide"))
     if "user_jvp" in rec:
         jvps = [n for n in terms if n.startswith("jvp")]
         if "error" in rec["user_jvp"]:

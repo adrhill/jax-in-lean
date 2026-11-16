@@ -1,11 +1,11 @@
 {
   "$schema": "../scripts/bug.schema.json",
   "title": "`broadcast_in_dim` ignores non-increasing `broadcast_dimensions` if the shape is unchanged",
-  "status": "found",
+  "status": "refuted",
   "primitive": "broadcast_in_dim",
   "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:7583",
-  "lean_refutation": null,
+  "lean_refutation": "Jax.Lax.broadcastInDimFwd_not_correct",
   "upstream_issue": null,
   "description": [
     "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order,",
@@ -15,9 +15,7 @@
     "",
     "`_broadcast_in_dim_fwd_rule` forwards the operand whenever `shape` equals the operand shape.",
     "It does not check that `broadcast_dimensions` is the identity.",
-    "The equation is dropped from the jaxpr, also in eager mode and in derivatives.",
-    "",
-    "This is a bug of a forwarding rule and not of a differentiation rule, so the Lean model does not cover it."
+    "The equation is dropped from the jaxpr, also in eager mode and in derivatives."
   ],
   "reproducer": [
     "import jax",
