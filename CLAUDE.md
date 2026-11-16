@@ -15,6 +15,8 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 bugs/<name>.json    # One record per JAX bug, with its reproducer
 scripts/audit.sh    # Forbidden-token scan, build, bug reproducers
 scripts/bugs.py     # Checks the bug records and runs their reproducers
+scripts/shapes.py   # Shape-level differential test of the model against JAX
+gen/                # Generated Lean files of scripts/shapes.py (gitignored)
 pyproject.toml      # Pins the modelled JAX version
 ```
 
@@ -45,6 +47,10 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
   If JAX's rule is wrong, the model must be wrong in the same way.
 - **Cite the source.** Every mirrored definition cites `jax/_src/<file>.py:<line>` of the pinned version
   and quotes the rule if it is short.
+- **Shapes are tested.** `scripts/shapes.py` traces every modelled function and rule in JAX
+  and checks with `decide` that the shapes in the model's types agree,
+  and that JAX rejects an input exactly when a proof argument is false.
+  A new primitive or rule gets cases there. Model definitions must reduce by `decide` on concrete shapes.
 - **Primal semantics** are not defined in Python but by XLA.
   Take them from the `lax` docstring and the [StableHLO spec](https://github.com/openxla/stablehlo/blob/main/docs/spec.md).
 - **Dropped parameters** that have no meaning over the reals (e.g. `accuracy`) are omitted and stay visible in the quoted source.

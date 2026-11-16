@@ -57,7 +57,31 @@ def broadcastShapes (ss : List (Shape n)) : Shape n :=
 
 /-- The axes that remain when `axes` are removed, in increasing order.
 This is `np.delete(np.arange(n), axes)`. -/
-def keptAxes (axes : Finset (Fin n)) : Fin axesᶜ.card → Fin n := axesᶜ.orderEmbOfFin rfl
+def keptAxesList (axes : Finset (Fin n)) : List (Fin n) := (List.finRange n).filter (· ∉ axes)
+
+theorem sortedLT_keptAxesList (axes : Finset (Fin n)) : (keptAxesList axes).SortedLT :=
+  ((List.sortedLT_finRange n).pairwise.filter _).sortedLT
+
+theorem mem_keptAxesList {axes : Finset (Fin n)} {p : Fin n} : p ∈ keptAxesList axes ↔ p ∉ axes := by
+  simp [keptAxesList]
+
+theorem sort_compl (axes : Finset (Fin n)) : axesᶜ.sort = keptAxesList axes :=
+  (Finset.sortedLT_sort _).eq_of_mem_iff (sortedLT_keptAxesList axes) fun p => by
+    rw [Finset.mem_sort, mem_keptAxesList, Finset.mem_compl]
+
+theorem length_keptAxesList (axes : Finset (Fin n)) : (keptAxesList axes).length = axesᶜ.card := by
+  rw [← sort_compl, Finset.length_sort]
+
+/-- Axis `a` of the axes that remain when `axes` are removed.
+`keptAxes_eq_orderEmbOfFin` shows that this is the increasing enumeration of `axesᶜ`. -/
+def keptAxes (axes : Finset (Fin n)) (a : Fin axesᶜ.card) : Fin n :=
+  (keptAxesList axes).get (Fin.cast (length_keptAxesList axes).symm a)
+
+/-- The position of the axis `p ∉ axes` among the axes that remain when `axes` are removed.
+It inverts `keptAxes`, see `keptAxes_keptAxesIdx` and `keptAxesIdx_keptAxes`. -/
+def keptAxesIdx (axes : Finset (Fin n)) (p : Fin n) (hp : p ∉ axes) : Fin axesᶜ.card :=
+  ⟨(keptAxesList axes).idxOf p, by
+    rw [← length_keptAxesList]; exact List.idxOf_lt_length_of_mem (mem_keptAxesList.2 hp)⟩
 
 /-! ## Row-major order -/
 
@@ -89,11 +113,20 @@ theorem Broadcastable.right {s t : Shape n} (h : Broadcastable s t) :
 theorem broadcastable_left (s t : Shape n) : Broadcastable s (broadcastShape s t) :=
   fun d => by unfold broadcastShape; split <;> simp_all
 
+/-- `keptAxes` is the increasing enumeration `orderEmbOfFin` of the axes not in `axes`. -/
+theorem keptAxes_eq_orderEmbOfFin (axes : Finset (Fin n)) :
+    keptAxes axes = axesᶜ.orderEmbOfFin rfl := by
+  funext a
+  rw [Finset.orderEmbOfFin_apply]
+  simp only [keptAxes, List.get_eq_getElem, Fin.val_cast]
+  congr 1
+  exact (sort_compl axes).symm
+
 theorem keptAxes_notMem (axes : Finset (Fin n)) (a : Fin axesᶜ.card) : keptAxes axes a ∉ axes :=
-  Finset.mem_compl.1 (Finset.orderEmbOfFin_mem _ _ a)
+  mem_keptAxesList.1 (List.get_mem _ _)
 
 theorem keptAxes_strictMono (axes : Finset (Fin n)) : StrictMono (keptAxes axes) :=
-  (axesᶜ.orderEmbOfFin rfl).strictMono
+  (sortedLT_keptAxesList axes).strictMono_get.comp fun _ _ h => h
 
 theorem keptAxes_injective (axes : Finset (Fin n)) : Function.Injective (keptAxes axes) :=
   (keptAxes_strictMono axes).injective
@@ -104,23 +137,28 @@ theorem keptAxes_eq_of_strictMono {axes : Finset (Fin n)} {k : ℕ} (hk : axes�
     keptAxes axes a = f (Fin.cast hk a) := by
   subst hk
   have := Finset.orderEmbOfFin_unique (s := axesᶜ) rfl (fun i => Finset.mem_compl.2 (hf i)) hmono
-  rw [keptAxes, ← this]
+  rw [keptAxes_eq_orderEmbOfFin, ← this]
   rfl
 
 /-- Every axis not in `axes` is kept. -/
-theorem keptAxes_orderIsoOfFin_symm (axes : Finset (Fin m)) (p : Fin m) (hp : p ∈ axesᶜ) :
-    keptAxes axes ((axesᶜ.orderIsoOfFin rfl).symm ⟨p, hp⟩) = p := by
-  show ((axesᶜ.orderIsoOfFin rfl ((axesᶜ.orderIsoOfFin rfl).symm ⟨p, hp⟩) : Fin m)) = p
-  rw [OrderIso.apply_symm_apply]
+theorem keptAxes_keptAxesIdx (axes : Finset (Fin n)) (p : Fin n) (hp : p ∉ axes) :
+    keptAxes axes (keptAxesIdx axes p hp) = p :=
+  List.idxOf_get _
 
-theorem orderIsoOfFin_symm_keptAxes (axes : Finset (Fin m)) (a : Fin axesᶜ.card)
-    (hp : keptAxes axes a ∈ axesᶜ) : (axesᶜ.orderIsoOfFin rfl).symm ⟨keptAxes axes a, hp⟩ = a := by
-  rw [OrderIso.symm_apply_eq]
-  rfl
+theorem keptAxesIdx_keptAxes (axes : Finset (Fin n)) (a : Fin axesᶜ.card)
+    (hp : keptAxes axes a ∉ axes) : keptAxesIdx axes (keptAxes axes a) hp = a :=
+  Fin.ext (List.get_idxOf (sortedLT_keptAxesList axes).nodup _)
+
+/-- `keptAxesIdx` is the inverse `(orderIsoOfFin _ _).symm` of the increasing enumeration of `axesᶜ`. -/
+theorem keptAxesIdx_eq_orderIsoOfFin_symm (axes : Finset (Fin n)) (p : Fin n) (hp : p ∉ axes) :
+    keptAxesIdx axes p hp = (axesᶜ.orderIsoOfFin rfl).symm ⟨p, Finset.mem_compl.2 hp⟩ := by
+  rw [OrderIso.eq_symm_apply]
+  refine Subtype.ext ?_
+  rw [Finset.coe_orderIsoOfFin_apply, ← keptAxes_eq_orderEmbOfFin, keptAxes_keptAxesIdx]
 
 theorem keptAxes_surj {axes : Finset (Fin n)} {p : Fin n} (hp : p ∉ axes) :
     ∃ a, keptAxes axes a = p :=
-  ⟨_, keptAxes_orderIsoOfFin_symm axes p (Finset.mem_compl.2 hp)⟩
+  ⟨_, keptAxes_keptAxesIdx axes p hp⟩
 
 /-- Removing no axes keeps all of them in place. -/
 theorem keptAxes_val_of_eq_empty {axes : Finset (Fin n)} (h : axes = ∅) (a : Fin axesᶜ.card) :

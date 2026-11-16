@@ -54,7 +54,7 @@ def _reduce_sum_transpose_rule(cotangent, operand, *, axes, out_sharding):
 ``` -/
 def reduceSumTranspose (axes : Finset (Fin n)) (cotangent : Tensor (Index (s ∘ keptAxes axes))) :
     Tensor (Index s) :=
-  broadcastInDim s (keptAxes axes) (.refl _) cotangent
+  broadcastInDim s (keptAxes axes) (.refl _) (keptAxes_injective axes) cotangent
 
 /-- The transpose rule of `reduce_sum` transposes `reduce_sum`. -/
 theorem reduceSumTranspose_correct (axes : Finset (Fin n)) :

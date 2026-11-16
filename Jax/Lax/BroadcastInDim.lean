@@ -25,15 +25,15 @@ variable {m n : ℕ} {so : Shape m}
                                     sharding=sharding)
 ``` -/
 def broadcastInDimJvp (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
-    (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (operandDot _operand : Tensor (Index so)) :
-    Tensor (Index shape) :=
-  broadcastInDim shape broadcastDimensions h operandDot
+    (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : Function.Injective broadcastDimensions)
+    (operandDot _operand : Tensor (Index so)) : Tensor (Index shape) :=
+  broadcastInDim shape broadcastDimensions h hd operandDot
 
 /-- The JVP rule of `broadcast_in_dim` computes the derivative of `broadcast_in_dim`. -/
 theorem broadcastInDimJvp_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
-    (h : BroadcastsTo so (shape ∘ broadcastDimensions)) :
-    IsJvpOf (broadcastInDimJvp shape broadcastDimensions h)
-      (broadcastInDim shape broadcastDimensions h) :=
+    (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : Function.Injective broadcastDimensions) :
+    IsJvpOf (broadcastInDimJvp shape broadcastDimensions h hd)
+      (broadcastInDim shape broadcastDimensions h hd) :=
   isJvpOf_of_linear
     { toFun := fun x j => x ((j.proj broadcastDimensions).unbroadcast h)
       map_add' := fun _ _ => rfl
@@ -129,18 +129,6 @@ private theorem keptAxes_dimsSet (U : Finset (Fin m)) {N : ℕ} (hN : N = m)
     Fin.valEmbedding_apply, not_exists, not_and]
   exact fun x hx hxe => keptAxes_notMem U i (Fin.ext hxe ▸ hx)
 
-/-- Inserting no axes leaves the shape as it is. -/
-private theorem expandDimsShape_of_eq_empty {k : ℕ} (s : Shape k) (dims : Finset (Fin n))
-    (hdims : dims = ∅) (h : dimsᶜ.card = k) (p : Fin n) :
-    expandDimsShape s dims h p = s ⟨p, by subst hdims; simp at h; omega⟩ := by
-  subst hdims
-  unfold expandDimsShape
-  simp only [Finset.notMem_empty, ↓reduceDIte]
-  congr 1
-  apply Fin.ext
-  exact (keptAxes_val_of_eq_empty rfl _).symm.trans
-    (congrArg Fin.val (keptAxes_orderIsoOfFin_symm _ p _))
-
 private theorem unitDims_notMem {d : Fin m} : d ∉ unitDims so ↔ so d ≠ 1 := by
   simp [unitDims]
 
@@ -149,7 +137,7 @@ if `broadcast_dimensions` is strictly increasing. -/
 theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : StrictMono broadcastDimensions) :
     IsTransposeOf (broadcastInDimTranspose so shape broadcastDimensions hd.injective)
-      (broadcastInDim shape broadcastDimensions h) := by
+      (broadcastInDim shape broadcastDimensions h hd.injective) := by
   intro ct x
   have hAc := card_compl_broadcastInDimTransposeAxes (so := so) hd.injective
   have hN := broadcastInDimTranspose_rank (so := so) hd.injective
@@ -173,7 +161,7 @@ theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions :
         simpa [unitDims] using hp.2
       rw [show Fin.cast hN p = d from Fin.ext hdp.symm, hd1]
     · obtain ⟨b, rfl⟩ := keptAxes_surj hp
-      rw [orderIsoOfFin_symm_keptAxes, Function.comp_apply, keptAxes_broadcastInDimTransposeAxes hd,
+      rw [keptAxesIdx_keptAxes, Function.comp_apply, keptAxes_broadcastInDimTransposeAxes hd,
         hcast, hshape]
       rfl
   · -- The entries of the result sum the cotangent over the entries that are broadcast from `i`.
@@ -219,22 +207,11 @@ for an operand of shape `(3, 2)` and a result of shape `(2, 3)`,
 it returns a cotangent of shape `(2, 3)` instead of `(3, 2)`. -/
 theorem broadcastInDimTranspose_not_correct :
     ¬ IsTransposeOf (broadcastInDimTranspose ![3, 2] ![2, 3] ![1, 0] (by decide))
-      (broadcastInDim (so := ![3, 2]) ![2, 3] ![1, 0] (by unfold BroadcastsTo; decide)) := by
+      (broadcastInDim (so := ![3, 2]) ![2, 3] ![1, 0] (by unfold BroadcastsTo; decide) (by decide)) := by
   intro htr
   obtain ⟨_, _, _, ⟨hN, hs, _⟩, _⟩ := htr 0 0
-  have hU : unitDims ![3, 2] = ∅ := by decide
-  have hA : broadcastInDimTransposeAxes ![3, 2] (![1, 0] : Fin 2 → Fin 2) = ∅ := by
-    rw [broadcastInDimTransposeAxes, Finset.compl_eq_empty_iff]
-    refine Finset.eq_univ_of_card _ ?_
-    rw [Finset.card_image_of_injective _ ((by decide : Function.Injective (![1, 0] : Fin 2 → Fin 2)).comp
-      (keptAxes_injective _)), Finset.card_univ, Fintype.card_fin, Fintype.card_fin, hU]
-    simp
-  have hS : ∀ N, dimsSet N ((unitDims ![3, 2]).map Fin.valEmbedding) = ∅ := fun N => by
-    simp [hU, dimsSet]
   -- Axis 0 of the result of the rule has size 2, and axis 0 of the operand has size 3.
-  have h0 := hs ⟨0, by omega⟩
-  rw [expandDimsShape_of_eq_empty _ _ (hS _), Function.comp_apply,
-    show keptAxes _ _ = (0 : Fin 2) from Fin.ext (keptAxes_val_of_eq_empty hA _)] at h0
+  have h0 := hs ⟨0, by decide⟩
   rw [show Fin.cast hN ⟨0, _⟩ = (0 : Fin 2) from rfl] at h0
   exact absurd h0 (by decide)
 

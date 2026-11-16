@@ -15,7 +15,8 @@ mirror the source in Lean, state properties, and settle each one as proven or re
 | `Jax/Lax/Primal.lean` | What each `lax` primitive computes. |
 | `Jax/Lax/<Name>.lean` | The differentiation rules of one primitive, with proofs. |
 | `bugs/` | The JAX bugs found so far, one JSON record each, with a reproducer. |
-| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, and runs the reproducers. |
+| `scripts/shapes.py` | Checks the shapes that the model computes against the shapes that JAX traces. |
+| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, runs the reproducers and the shape test. |
 | `pyproject.toml` | Pins the JAX version being modelled. |
 
 ## Scope
@@ -33,6 +34,13 @@ A property refuted in Lean counts as a JAX bug only once a Python script reprodu
 A bug with the status `refuted` has been shown on JAX, and its cause has been proven in our model of JAX.
 The script confirms the bug, and the Lean theorem explains it,
 which carries over to JAX only as far as the model is faithful to the source.
+
+Faithfulness is tested at the level of shapes.
+`scripts/shapes.py` traces every modelled primitive and rule on abstract inputs in JAX,
+calling the registered JVP and transpose rules directly, and also `jax.jvp` and `jax.vjp`.
+Lean then checks with `decide` that the shapes in the types of the model's definitions are the same,
+and that JAX raises exactly when a proof argument of the model is false.
+The test compares the model with JAX, not with the mathematics, so JAX's bugs pass it.
 
 ## Setup
 

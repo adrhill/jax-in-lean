@@ -11,3 +11,6 @@ __pycache__/
 result
 
 .DS_Store
+
+# Generated tests
+gen/

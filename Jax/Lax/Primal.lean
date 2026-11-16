@@ -151,10 +151,13 @@ noncomputable def polynomial {K : ℕ} {sx : Shape n} {sc : Fin (K + 1) → Shap
 
 /-- `lax.broadcast_in_dim`: axis `d` of the operand becomes axis `broadcastDimensions d` of the result.
 `jax/_src/lax/lax.py:2946`; `out_sharding` is dropped.
-The proof `h` is the shape check of `_broadcast_in_dim_shape_rule`, `jax/_src/lax/lax.py:7474`.
-The rule also rejects duplicates in `broadcast_dimensions`, which the semantics do not need. -/
+The proofs `h` and `hd` are the shape checks of `_broadcast_in_dim_shape_rule`
+that the sizes agree, `jax/_src/lax/lax.py:7474`,
+and that `broadcast_dimensions` has no duplicates, `jax/_src/lax/lax.py:7485`.
+The semantics do not need `hd`. -/
 def broadcastInDim {so : Shape m} (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
-    (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (operand : Tensor (Index so)) :
+    (h : BroadcastsTo so (shape ∘ broadcastDimensions))
+    (_hd : Function.Injective broadcastDimensions) (operand : Tensor (Index so)) :
     Tensor (Index shape) :=
   fun j => operand ((j.proj broadcastDimensions).unbroadcast h)
 
@@ -191,17 +194,16 @@ and the axes of `s` in order on the others.
   for i in sorted(dims_set):
     result_shape.insert(i, 1)
 ``` -/
-noncomputable def expandDimsShape {k n : ℕ} (s : Shape k) (dims : Finset (Fin n))
+def expandDimsShape {k n : ℕ} (s : Shape k) (dims : Finset (Fin n))
     (h : dimsᶜ.card = k) : Shape n :=
-  fun p => if hp : p ∈ dims then 1 else
-    s (Fin.cast h ((dimsᶜ.orderIsoOfFin rfl).symm ⟨p, Finset.mem_compl.2 hp⟩))
+  fun p => if hp : p ∈ dims then 1 else s (Fin.cast h (keptAxesIdx dims p hp))
 
 theorem expandDimsShape_broadcastsTo {k n : ℕ} (s : Shape k) (dims : Finset (Fin n))
     (h : dimsᶜ.card = k) :
     BroadcastsTo s (expandDimsShape s dims h ∘ (keptAxes dims ∘ Fin.cast h.symm)) :=
   fun d => Or.inr <| by
     simp only [Function.comp_apply, expandDimsShape, keptAxes_notMem, ↓reduceDIte,
-      orderIsoOfFin_symm_keptAxes, Fin.cast_cast, Fin.cast_eq_self]
+      keptAxesIdx_keptAxes, Fin.cast_cast, Fin.cast_eq_self]
 
 /-- `lax.expand_dims`, which inserts axes of size 1 at the positions `dimensions` of the result.
 Negative axes are not modelled.
@@ -223,11 +225,11 @@ def expand_dims(array: ArrayLike, dimensions: Sequence[int]) -> Array:
   broadcast_dims = [i for i in range(ndim_out) if i not in dims_set]
   return broadcast_in_dim(array, result_shape, broadcast_dims)
 ``` -/
-noncomputable def expandDims {k : ℕ} {s : Shape k} (dimensions : Finset ℕ)
+def expandDims {k : ℕ} {s : Shape k} (dimensions : Finset ℕ)
     (h : ∀ i ∈ dimensions, i < k + dimensions.card) (array : Tensor (Index s)) :
     Tensor (Index (expandDimsShape s (dimsSet _ dimensions) (card_compl_dimsSet h))) :=
   broadcastInDim _ (keptAxes (dimsSet _ dimensions) ∘ Fin.cast (card_compl_dimsSet h).symm)
-    (expandDimsShape_broadcastsTo _ _ _) array
+    (expandDimsShape_broadcastsTo _ _ _) ((keptAxes_injective _).comp (Fin.cast_injective _)) array
 
 open scoped Classical in
 /-- One entry of `_balanced_cmp`: `1` if `a > b`, `1/2` if `a == b`, `0` otherwise. -/

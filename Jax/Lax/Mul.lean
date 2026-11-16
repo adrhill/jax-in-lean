@@ -17,13 +17,15 @@ namespace Jax.Lax
 variable {n : ℕ} {sx sy : Shape n}
 
 /-- The JVP rule of `mul` for its first argument.
-`jax/_src/lax/lax.py:5583`: `lambda xdot, x, y, **kwargs: mul(xdot, y, **kwargs)` -/
+`ad.defbilinear(mul_p, …)` at `jax/_src/lax/lax.py:5591` replaces the rules of `ad.defjvp` at line 5582.
+`jax/_src/interpreters/ad.py:1006`: `lhs_jvp = lambda g, x, y, **kwargs: prim.bind(g, y, **kwargs)` -/
 noncomputable def mulJvpLeft (h : Broadcastable sx sy) (xdot _x : Tensor (Index sx))
     (y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx sy)) :=
   mul h xdot y
 
 /-- The JVP rule of `mul` for its second argument.
-`jax/_src/lax/lax.py:5584`: `lambda ydot, x, y, **kwargs: mul(x, ydot, **kwargs)` -/
+`ad.defbilinear(mul_p, …)` at `jax/_src/lax/lax.py:5591` replaces the rules of `ad.defjvp` at line 5582.
+`jax/_src/interpreters/ad.py:1007`: `rhs_jvp = lambda g, x, y, **kwargs: prim.bind(x, g, **kwargs)` -/
 noncomputable def mulJvpRight (h : Broadcastable sx sy) (ydot : Tensor (Index sy))
     (x : Tensor (Index sx)) (_y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx sy)) :=
   mul h x ydot
