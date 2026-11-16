@@ -11,13 +11,16 @@ mirror the source in Lean, state properties, and settle each one as proven or re
 
 | Path | Contents |
 |---|---|
-| `Jax/` | Model of JAX primitives and their differentiation rules, with proofs. |
+| `Jax/Scalar.lean`, `Jax/Shape.lean`, `Jax/Core.lean` | Array entries, shapes, and what it means for a rule to be correct. |
+| `Jax/Lax/Primal.lean` | What each `lax` primitive computes. |
+| `Jax/Lax/<Name>.lean` | The differentiation rules of one primitive, with proofs. |
 | `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, then builds. |
 | `pyproject.toml` | Pins the JAX version being modelled. |
 
 ## Scope
 
-- Arrays hold real numbers. Floating point, NaN and infinities are out of scope for now.
+- Arrays hold exact real numbers, infinities and NaN. Rounding, overflow and signed zeros are out of scope for now.
+- Shapes, axes and broadcasting are modelled, so a rule that returns the wrong shape can be refuted.
 - The model lives at the level of jaxprs and `lax` primitives, not Python or `jax.numpy`.
 - The first property proven for every primitive is that its JVP rule computes its derivative.
 

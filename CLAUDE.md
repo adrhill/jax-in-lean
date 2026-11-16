@@ -7,8 +7,11 @@ Sister repository of `../asdex`.
 
 ```
 Jax.lean, Jax/      # Model of JAX and proofs about it
-├── Core.lean       # Tensor, IsJvpOf
-└── Lax/<Name>.lean # One file per lax primitive: primal, JVP rule, proofs
+├── Scalar.lean     # Array entries: reals, infinities and NaN
+├── Shape.lean      # Shape, Index, broadcasting
+├── Core.lean       # Tensor, IsJvpOf, IsJvp₂Of, IsTransposeOf
+├── Lax/Primal.lean # Primal semantics of every primitive, and helpers that rules call
+└── Lax/<Name>.lean # One file per lax primitive: differentiation rules and proofs
 scripts/audit.sh    # Forbidden-token scan + build
 pyproject.toml      # Pins the modelled JAX version
 ```
@@ -28,8 +31,12 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 
 ## Modelling rules
 
-- **Reals only.** Arrays are `Tensor ι := ι → ℝ` over a finite index type `ι`.
-  A shape `(m, n)` is `Fin m × Fin n`. No floats, NaN, infinities or integer dtypes for now.
+- **Exact scalars.** An entry is a `Scalar`: a real number, `+∞`, `-∞` or NaN.
+  Special values follow IEEE 754. Finite values are exact: no rounding, no overflow, no signed zero, no integer dtypes for now.
+- **Shapes.** A shape `(m, n)` is `![m, n] : Shape 2`, and an array of shape `s` is a `Tensor (Index s)`.
+  Shape checks that JAX does at trace time are proof arguments of the primitive.
+- **Computed shapes.** A rule has the output shape that its own code computes, even if it only equals the expected shape propositionally.
+  Correctness notions compare arrays with `Tensor.Same`, so a rule that returns the wrong shape is refutable.
 - **Jaxpr level.** Model `lax` primitives and jaxprs, not Python or `jax.numpy`.
 - **Mirror the source.** Differentiation rules (`ad.defjvp`, `ad.deflinear`, transpose rules)
   are transcribed from the JAX source as written, including argument order, not from the textbook.
@@ -44,7 +51,8 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 
 - No `sorry`, `admit`, `native_decide`, `axiom`, `unsafe` or `implemented_by`.
   Only the standard axioms `propext`, `Classical.choice` and `Quot.sound` may appear.
-- The first theorem for a primitive `foo` is `fooJvp_correct : IsJvpOf fooJvp foo`.
+- The first theorem for a primitive `foo` is `fooJvp_correct`, stated with `IsJvpOf` or `IsJvp₂Of`,
+  or with `IsJvpOfOn` or `IsJvp₂OfOn` and the largest domain on which it holds.
 - Never weaken a statement to make it provable.
   If a property is false, prove its negation with a concrete counterexample and keep both the statement and the refutation.
 - A refutation is a JAX bug only with a Python reproducer that shows it on the pinned JAX.
