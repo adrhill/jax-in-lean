@@ -1,6 +1,6 @@
 {
   "$schema": "../scripts/bug.schema.json",
-  "title": "`broadcast_in_dim` ignores non-increasing `broadcast_dimensions` if the shape is unchanged",
+  "title": "`broadcast_in_dim` skips the transpose if the result shape equals the operand shape",
   "status": "refuted",
   "primitive": "broadcast_in_dim",
   "jax_version": "0.12.0.1",
@@ -9,13 +9,16 @@
   "upstream_issue": null,
   "description": [
     "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order,",
-    "and its docstring shows `broadcast_dimensions=(1, 0)` as an implicit transpose.",
-    "If the result shape equals the operand shape, the result is silently wrong:",
-    "JAX returns the operand unchanged instead of permuting its axes.",
+    "and its docstring uses `broadcast_dimensions=(1, 0)` as an implicit transpose.",
+    "But if the result has the shape of the operand, as for a square matrix,",
+    "JAX silently returns the operand instead of permuting its axes.",
+    "This happens in eager mode, under `jit` and under differentiation.",
     "",
-    "`_broadcast_in_dim_fwd_rule` forwards the operand whenever `shape` equals the operand shape.",
-    "It does not check that `broadcast_dimensions` is the identity.",
-    "The equation is dropped from the jaxpr, also in eager mode and in derivatives."
+    "**Cause.** `_broadcast_in_dim_fwd_rule` forwards the operand whenever `shape` equals the operand shape,",
+    "without checking that `broadcast_dimensions` is the identity.",
+    "The equation is then dropped from the jaxpr.",
+    "",
+    "**Fix.** Forward the operand only if `broadcast_dimensions` is also `(0, 1, …, ndim - 1)`."
   ],
   "reproducer": [
     "import jax",

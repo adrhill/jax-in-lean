@@ -1,6 +1,6 @@
 {
   "$schema": "../scripts/bug.schema.json",
-  "title": "`broadcast_in_dim` cannot be transposed for non-increasing `broadcast_dimensions`",
+  "title": "Reverse mode of `broadcast_in_dim` raises for non-increasing `broadcast_dimensions`",
   "status": "refuted",
   "primitive": "broadcast_in_dim",
   "jax_version": "0.12.0.1",
@@ -8,18 +8,20 @@
   "lean_refutation": "Jax.Lax.broadcastInDimTranspose_not_correct",
   "upstream_issue": null,
   "description": [
-    "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order.",
-    "Its shape rule only rejects duplicates, and its docstring shows `broadcast_dimensions=(1, 0)` as an implicit transpose.",
-    "The primal and forward mode handle this correctly if the result shape differs from the operand shape.",
-    "Reverse mode raises a `ValueError`, because the cotangent has the wrong shape.",
+    "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order:",
+    "its shape rule only rejects duplicates, and its docstring uses `broadcast_dimensions=(1, 0)` as an implicit transpose.",
+    "For such dimensions the primal and forward mode are correct,",
+    "but reverse mode raises a `ValueError` because the cotangent has the wrong shape.",
     "",
-    "`_broadcast_in_dim_transpose_rule` sums the cotangent over the axes that are not in `broadcast_dimensions`",
-    "and puts back the axes of size 1 with `expand_dims`.",
-    "`reduce_sum` keeps the remaining axes in the order of the result.",
-    "The operand has them in the order given by `broadcast_dimensions`.",
+    "**Cause.** `_broadcast_in_dim_transpose_rule` sums the cotangent over the axes that are not in `broadcast_dimensions`",
+    "and restores the axes of size 1 with `expand_dims`.",
+    "`reduce_sum` leaves the remaining axes in the order of the result,",
+    "but the operand has them in the order of `broadcast_dimensions`.",
     "The two orders agree only if `broadcast_dimensions` is increasing, and the rule never permutes the axes back.",
     "",
-    "If the result shape equals the operand shape, the primal is already wrong, see `broadcast-in-dim-forwarding`."
+    "**Fix.** Transpose the summed cotangent back to the axis order of the operand.",
+    "",
+    "If the result shape equals the operand shape, even the primal is wrong, see `broadcast-in-dim-forwarding`."
   ],
   "reproducer": [
     "import jax",
