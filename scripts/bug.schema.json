@@ -47,7 +47,7 @@
       "items": { "type": "string" }
     },
     "reproducer": {
-      "description": "A Python script, one line per array entry. It asserts the wrong behaviour, so it succeeds as long as the bug exists.",
+      "description": "A Python script that runs on its own, one line per array entry. It prints what JAX computes, and a comment below each print states the output: `# output: <text>` where JAX is correct, and `# desired: <text>` followed by `# actual: <text>` where it is not. scripts/bugs.py checks that the script prints these outputs.",
       "type": "array",
       "items": { "type": "string" },
       "minItems": 1

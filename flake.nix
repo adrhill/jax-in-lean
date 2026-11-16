@@ -21,6 +21,8 @@
             pkgs.elan
             pkgs.uv
             pkgs.python315
+            # Runs the Git hooks of `prek.toml`.
+            pkgs.prek
           ];
           env = {
             # uv manages the packages, Nix provides the interpreter.

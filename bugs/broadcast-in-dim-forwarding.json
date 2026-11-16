@@ -22,20 +22,28 @@
   "reproducer": [
     "import jax",
     "import jax.numpy as jnp",
-    "import numpy as np",
     "from jax import lax",
     "",
     "# `broadcast_in_dim` with `broadcast_dimensions=(1, 0)` is a transpose.",
     "x = jnp.arange(6.0).reshape(3, 2)",
-    "np.testing.assert_array_equal(lax.broadcast_in_dim(x, (2, 3), (1, 0)), x.T)",
+    "print(lax.broadcast_in_dim(x, (2, 3), (1, 0)))",
+    "# output: [[0. 2. 4.]",
+    "#          [1. 3. 5.]]",
     "",
     "# For a square operand, JAX returns the operand instead of its transpose.",
     "g = lambda x: lax.broadcast_in_dim(x, (2, 2), (1, 0))",
     "y = jnp.array([[5.0, 6.0], [7.0, 8.0]])",
-    "np.testing.assert_array_equal(g(y), y)",
-    "assert not np.array_equal(g(y), y.T)",
+    "print(g(y))",
+    "# desired: [[5. 7.]",
+    "#           [6. 8.]]",
+    "# actual:  [[5. 6.]",
+    "#           [7. 8.]]",
     "",
     "# The equation is missing from the jaxpr.",
-    "assert len(jax.make_jaxpr(g)(y).eqns) == 0"
+    "print(jax.make_jaxpr(g)(y))",
+    "# desired: { lambda ; a:f32[2,2]. let",
+    "#              b:f32[2,2] = broadcast_in_dim[broadcast_dimensions=(1, 0)] a",
+    "#            in (b,) }",
+    "# actual:  { lambda ; a:f32[2,2]. let  in (a,) }"
   ]
 }

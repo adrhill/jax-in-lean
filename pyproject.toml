@@ -11,3 +11,16 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.5",
+    "ty>=0.0.104",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ty.environment]
+# The scripts import each other; `bugs` would otherwise resolve to the `bugs/` records.
+root = ["scripts"]

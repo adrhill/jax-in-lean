@@ -1,10 +1,18 @@
 """Check the bug records in `bugs/` and run their reproducers on the installed JAX.
 
-A reproducer asserts the wrong behaviour, so it must succeed unless the bug is marked as fixed.
-Pass `--show <name>` to print the reproducer of `bugs/<name>.json` instead.
+A reproducer is a plain script that prints what JAX computes.
+A comment below each `print` states the output:
+`# output: <text>` where JAX is correct,
+and `# desired: <text>` followed by `# actual: <text>` where it is not.
+Text of several lines continues in comments that are indented to the same column.
+`parse` reads these comments, and `reproduce` checks them against what the script prints,
+so a reproducer must print its `actual` outputs unless the bug is marked as fixed.
+Pass `--show <name>` to print the reproducer of `bugs/<name>.json`.
 """
 
+import difflib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 SCHEMA = json.loads((ROOT / "scripts" / "bug.schema.json").read_text())
 STATUSES = SCHEMA["properties"]["status"]["enum"]
+OUTPUT = re.compile(r"\s*# (output|desired|actual):\s+")
 
 
 def check(bug: dict) -> list[str]:
@@ -32,6 +41,70 @@ def check(bug: dict) -> list[str]:
     return errors
 
 
+def parse(reproducer: list[str]) -> list[str | dict[str, str]]:
+    """Split a reproducer into its code and the outputs that its comments state.
+
+    Code is a string, and an output is `{"desired": <text>, "actual": <text>}`,
+    with equal texts for an `# output:` comment.
+    """
+    parts: list[str | dict[str, str]] = []
+    code: list[str] = []
+    desired = None
+    i = 0
+    while i < len(reproducer):
+        match = OUTPUT.match(reproducer[i])
+        if not match:
+            code.append(reproducer[i])
+            i += 1
+            continue
+        # A continuation line has spaces in place of the label: `#          [1. 3. 5.]]`.
+        indent = re.sub(r"[^#\s]", " ", match[0])
+        text = [reproducer[i][match.end() :]]
+        i += 1
+        while i < len(reproducer) and reproducer[i].startswith(indent):
+            text.append(reproducer[i][len(indent) :])
+            i += 1
+        if match[1] == "desired":
+            desired = "\n".join(text)
+            continue
+        actual = "\n".join(text)
+        if (desired is None) != (match[1] == "output"):
+            raise ValueError(f"`# actual: {text[0]}` needs a `# desired:` comment before it")
+        if code:
+            parts.append("\n".join(code))
+            code = []
+        parts.append({"desired": actual if desired is None else desired, "actual": actual})
+        desired = None
+    if desired is not None:
+        raise ValueError(f"`# desired: {desired}` needs an `# actual:` comment after it")
+    if code:
+        parts.append("\n".join(code))
+    return parts
+
+
+def reproduce(bug: dict) -> list[str]:
+    """Run the reproducer of `bug` on the installed JAX and return the ways in which it fails.
+
+    It must print the `actual` outputs of its comments, one of which differs from the desired one.
+    """
+    try:
+        outputs = [part for part in parse(bug["reproducer"]) if isinstance(part, dict)]
+    except ValueError as e:
+        return [str(e)]
+    if all(output["desired"] == output["actual"] for output in outputs):
+        return ["the reproducer has no output with `# desired:` and a different `# actual:`"]
+    code = "\n".join(bug["reproducer"])
+    run = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True)
+    if run.returncode != 0:
+        return [f"the reproducer fails:\n{run.stderr}"]
+    stated = "\n".join(output["actual"] for output in outputs).splitlines()
+    printed = run.stdout.splitlines()
+    if printed != stated:
+        diff = difflib.unified_diff(stated, printed, "comments", "printed", lineterm="")
+        return ["the reproducer does not print its `actual` outputs:\n" + "\n".join(diff)]
+    return []
+
+
 def main() -> int:
     if sys.argv[1:2] == ["--show"]:
         bug = json.loads((ROOT / "bugs" / f"{sys.argv[2]}.json").read_text())
@@ -42,10 +115,7 @@ def main() -> int:
         bug = json.loads(path.read_text())
         errors = check(bug)
         if not errors and bug["status"] != "fixed":
-            code = "\n".join(bug["reproducer"])
-            run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-            if run.returncode != 0:
-                errors.append(f"the reproducer no longer shows the bug:\n{run.stderr}")
+            errors = reproduce(bug)
         for error in errors:
             print(f"{path.name}: {error}", file=sys.stderr)
         if not errors:

@@ -1,0 +1,36 @@
+# Git hooks, run by prek (https://prek.j178.dev). Install them once with `prek install`.
+# Every hook runs a tool of the uv environment, in the version that `uv.lock` pins,
+# so the hooks and the Lint workflow agree.
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "uv-lock"
+name = "uv lock --check"
+entry = "uv lock --check"
+language = "system"
+files = '^(pyproject\.toml|uv\.lock)$'
+pass_filenames = false
+
+[[repos.hooks]]
+id = "ruff-check"
+name = "ruff check"
+entry = "uv run ruff check --fix"
+language = "system"
+types = ["python"]
+
+[[repos.hooks]]
+id = "ruff-format"
+name = "ruff format"
+entry = "uv run ruff format"
+language = "system"
+types = ["python"]
+
+[[repos.hooks]]
+id = "ty"
+name = "ty check"
+entry = "uv run ty check"
+language = "system"
+types = ["python"]
+pass_filenames = false

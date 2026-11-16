@@ -14,3 +14,6 @@ result
 
 # Generated tests
 gen/
+
+# Built bug dashboard
+_site/

@@ -19,6 +19,7 @@ Usage: `python scripts/shapes.py [--jobs N] [--only PRIM]`.
 """
 
 import argparse
+import functools
 import itertools
 import json
 import math
@@ -57,8 +58,9 @@ def generate_cases():
         cases += [(prim, {"s": s}) for s in all_shapes()]
     cases += [("integer_pow", {"s": s, "y": y}) for s in all_shapes() for y in range(-4, 6)]
     for prim in ("mul", "div", "max", "pow"):
-        cases += [(prim, {"sx": a, "sy": b})
-                  for r in range(4) for a in shapes(r) for b in shapes(r)]
+        cases += [
+            (prim, {"sx": a, "sy": b}) for r in range(4) for a in shapes(r) for b in shapes(r)
+        ]
     # Polynomial: degrees 0 to 3, all shapes of rank at most 1,
     # and sizes 1 and 3 at rank 2 and 1 and 2 at rank 3.
     # At most 256 combinations of shapes per degree and rank, sampled.
@@ -91,11 +93,16 @@ def generate_cases():
                 pairs = [(so, sh) for sh in shapes(n) for so in shapes(m)]
                 if n == 3:
                     # Half of the sample broadcasts correctly.
-                    good = [(so, sh) for so, sh in pairs
-                            if all(so[i] in (1, sh[bd[i]]) for i in range(m))]
+                    good = [
+                        (so, sh)
+                        for so, sh in pairs
+                        if all(so[i] in (1, sh[bd[i]]) for i in range(m))
+                    ]
                     pairs = rng.sample(good, min(24, len(good))) + rng.sample(pairs, 24)
-                cases += [("broadcast_in_dim", {"so": so, "shape": sh, "bd": list(bd)})
-                          for so, sh in pairs]
+                cases += [
+                    ("broadcast_in_dim", {"so": so, "shape": sh, "bd": list(bd)})
+                    for so, sh in pairs
+                ]
     # expand_dims: operands up to rank 2 and dimensions in 0..4 without repetitions, in any order.
     for s in all_shapes(2):
         for k in range(4):
@@ -132,12 +139,13 @@ def jax_record(case):
     A result is `{"shape": [...]}`, `{"shapes": [[...], ...]}` or `{"error": "..."}`.
     The observation `primal` is always present.
     """
-    import jax
     import jax.numpy as jnp
-    from jax import lax
     from jax._src import config, core
     from jax._src.interpreters import ad
     from jax._src.lax import lax as L
+
+    import jax
+    from jax import lax
 
     prim, p = case
 
@@ -160,6 +168,12 @@ def jax_record(case):
     def undefined(s):
         return ad.UndefinedPrimal(core.ShapedArray(tuple(s), jnp.float32))
 
+    def jvp_rules(primitive):
+        # `ad.defjvp` registers a partial application of `ad.standard_jvp` to the rules.
+        jvp = ad.primitive_jvps[primitive]
+        assert isinstance(jvp, functools.partial)
+        return jvp.args[0]
+
     rec = {}
 
     def unary(f, primitive, s, **kw):
@@ -167,44 +181,51 @@ def jax_record(case):
         if "error" in rec["primal"]:
             return
         params = params_of(lambda x: f(x, **kw), primitive, s)
-        rule, = ad.primitive_jvps[primitive].args[0]
+        (rule,) = jvp_rules(primitive)
         rec["jvp"] = trace(lambda g, x: rule(g, x, **params), s, s)
         rec["user_jvp"] = trace(lambda x, t: jax.jvp(lambda x: f(x, **kw), (x,), (t,))[1], s, s)
-        rec["user_vjp"] = trace(lambda x, ct: jax.vjp(lambda x: f(x, **kw), x)[1](ct),
-                                s, rec["primal"]["shape"])
+        rec["user_vjp"] = trace(
+            lambda x, ct: jax.vjp(lambda x: f(x, **kw), x)[1](ct), s, rec["primal"]["shape"]
+        )
 
     if prim in ("sin", "cos", "log"):
         unary(getattr(lax, prim), getattr(L, f"{prim}_p"), p["s"])
     elif prim == "integer_pow":
         unary(lax.integer_pow, L.integer_pow_p, p["s"], y=p["y"])
     elif prim in ("mul", "div", "max", "pow"):
-        f, primitive = getattr(lax, prim), getattr(L, f"{prim}_p")
+        op, primitive = getattr(lax, prim), getattr(L, f"{prim}_p")
         sx, sy = p["sx"], p["sy"]
-        rec["primal"] = trace(f, sx, sy)
+        rec["primal"] = trace(op, sx, sy)
         if "error" not in rec["primal"]:
             out = rec["primal"]["shape"]
-            params = params_of(f, primitive, sx, sy)
-            left, right = ad.primitive_jvps[primitive].args[0]
+            params = params_of(op, primitive, sx, sy)
+            left, right = jvp_rules(primitive)
             if prim == "pow":
                 # `ad.defjvp2` passes the primal result `ans` after the tangent.
-                rec["jvp_left"] = trace(lambda g, x, y: left(g, f(x, y), x, y, **params), sx, sx, sy)
-                rec["jvp_right"] = trace(lambda g, x, y: right(g, f(x, y), x, y, **params),
-                                         sy, sx, sy)
+                rec["jvp_left"] = trace(
+                    lambda g, x, y: left(g, op(x, y), x, y, **params), sx, sx, sy
+                )
+                rec["jvp_right"] = trace(
+                    lambda g, x, y: right(g, op(x, y), x, y, **params), sy, sx, sy
+                )
             else:
                 rec["jvp_left"] = trace(lambda g, x, y: left(g, x, y, **params), sx, sx, sy)
                 rec["jvp_right"] = trace(lambda g, x, y: right(g, x, y, **params), sy, sx, sy)
             if prim == "mul":
                 tr = ad.primitive_transposes[primitive]
                 rec["transpose_left"] = trace(
-                    lambda ct, y: tr(ct, undefined(sx), y, **params)[0], out, sy)
+                    lambda ct, y: tr(ct, undefined(sx), y, **params)[0], out, sy
+                )
                 rec["transpose_right"] = trace(
-                    lambda ct, x: tr(ct, x, undefined(sy), **params)[1], out, sx)
+                    lambda ct, x: tr(ct, x, undefined(sy), **params)[1], out, sx
+                )
             rec["user_jvp"] = trace(
-                lambda x, y, tx, ty: jax.jvp(f, (x, y), (tx, ty))[1], sx, sy, sx, sy)
-            rec["user_vjp"] = trace(lambda x, y, ct: jax.vjp(f, x, y)[1](ct), sx, sy, out)
+                lambda x, y, tx, ty: jax.jvp(op, (x, y), (tx, ty))[1], sx, sy, sx, sy
+            )
+            rec["user_vjp"] = trace(lambda x, y, ct: jax.vjp(op, x, y)[1](ct), sx, sy, out)
     elif prim == "polynomial":
         sx, sc = p["sx"], p["sc"]
-        poly = lambda x, *cs: lax.polynomial(x, list(cs))  # noqa: E731
+        poly = lambda x, *cs: lax.polynomial(x, list(cs))
         rec["primal"] = trace(poly, sx, *sc)
         if "error" not in rec["primal"] and len(sc) >= 2:
             params = params_of(poly, L.polynomial_p, sx, *sc)
@@ -216,18 +237,22 @@ def jax_record(case):
 
             rec["jvp"] = trace(jvp, sx, sx, *sc)
             rec["user_jvp"] = trace(
-                lambda x, t, *cs: jax.jvp(lambda x: poly(x, *cs), (x,), (t,))[1], sx, sx, *sc)
+                lambda x, t, *cs: jax.jvp(lambda x: poly(x, *cs), (x,), (t,))[1], sx, sx, *sc
+            )
             rec["user_vjp"] = trace(
                 lambda x, ct, *cs: jax.vjp(lambda x: poly(x, *cs), x)[1](ct),
-                sx, rec["primal"]["shape"], *sc)
+                sx,
+                rec["primal"]["shape"],
+                *sc,
+            )
     elif prim in ("reduce_sum", "broadcast_in_dim"):
         if prim == "reduce_sum":
             s = p["s"]
-            f = lambda x: lax.reduce_sum(x, p["axes"])  # noqa: E731
+            f = lambda x: lax.reduce_sum(x, p["axes"])
             primitive = L.reduce_sum_p
         else:
             s = p["so"]
-            f = lambda x: lax.broadcast_in_dim(x, p["shape"], p["bd"])  # noqa: E731
+            f = lambda x: lax.broadcast_in_dim(x, p["shape"], p["bd"])
             primitive = L.broadcast_in_dim_p
         rec["primal"] = trace(f, s)
         if "error" not in rec["primal"]:
@@ -236,8 +261,11 @@ def jax_record(case):
                 params = params_of(f, primitive, s)
             else:
                 # The forwarding rule may drop the equation, so the parameters are built here.
-                params = dict(shape=tuple(p["shape"]), broadcast_dimensions=tuple(p["bd"]),
-                              sharding=None)
+                params = {
+                    "shape": tuple(p["shape"]),
+                    "broadcast_dimensions": tuple(p["bd"]),
+                    "sharding": None,
+                }
             jvp = ad.primitive_jvps[primitive]
             tr = ad.primitive_transposes[primitive]
             rec["jvp"] = trace(lambda g, x: jvp((x,), (g,), **params)[1], s, s)
@@ -247,8 +275,8 @@ def jax_record(case):
     elif prim == "reduce":
         s = p["s"]
         # A non-commutative monoid, so that `lax.reduce` binds `reduce_p`.
-        op = lambda x, y: lax.select(y == 1.0, x, y)  # noqa: E731
-        f = lambda x: lax.reduce(x, 1.0, op, p["dims"])  # noqa: E731
+        op = lambda x, y: lax.select(y == 1.0, x, y)
+        f = lambda x: lax.reduce(x, 1.0, op, p["dims"])
         rec["primal"] = trace(f, s)
         if "error" not in rec["primal"]:
             out = rec["primal"]["shape"]
@@ -256,7 +284,8 @@ def jax_record(case):
             jvp = ad.primitive_jvps[L.reduce_p]
             init_dot = ad.Zero(core.ShapedArray((), jnp.float32))
             rec["jvp"] = trace(
-                lambda g, x: jvp((x, jnp.float32(1.0)), (g, init_dot), **params)[1][0], s, s)
+                lambda g, x: jvp((x, jnp.float32(1.0)), (g, init_dot), **params)[1][0], s, s
+            )
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
     elif prim == "expand_dims":
@@ -293,7 +322,11 @@ def llist(s):
 
 
 def lfinset(xs, ty):
-    return f"({{{', '.join(map(str, sorted(set(xs))))}}} : Finset {ty})" if xs else f"(∅ : Finset {ty})"
+    return (
+        f"({{{', '.join(map(str, sorted(set(xs))))}}} : Finset {ty})"
+        if xs
+        else f"(∅ : Finset {ty})"
+    )
 
 
 def by(*unfold):
@@ -327,9 +360,11 @@ def lean_spec(prim, p):
         primal = f"Lax.{name} {imp} 0 0"
         # The rules of `ad.defjvp2` also take the primal result.
         rule_args = "0 0 0 0" if prim == "pow" else "0 0 0"
-        terms = {"primal": primal,
-                 "jvp_left": f"{name}JvpLeft {imp} {rule_args}",
-                 "jvp_right": f"{name}JvpRight {imp} {rule_args}"}
+        terms = {
+            "primal": primal,
+            "jvp_left": f"{name}JvpLeft {imp} {rule_args}",
+            "jvp_right": f"{name}JvpRight {imp} {rule_args}",
+        }
         vjp = [("jvp_left", "primal"), ("jvp_right", "primal")]
         if prim == "mul":
             terms["transpose_left"] = f"mulTransposeLeft {imp} 0 0"
@@ -352,9 +387,11 @@ def lean_spec(prim, p):
     if prim == "reduce_sum":
         S, A = lshape(p["s"]), lfinset(p["axes"], f"(Fin {len(p['s'])})")
         primal = f"reduceSum (s := {S}) {A} 0"
-        terms = {"primal": primal,
-                 "jvp": f"reduceSumJvp (s := {S}) {A} 0 0",
-                 "transpose": f"reduceSumTranspose (s := {S}) {A} 0"}
+        terms = {
+            "primal": primal,
+            "jvp": f"reduceSumJvp (s := {S}) {A} 0 0",
+            "transpose": f"reduceSumTranspose (s := {S}) {A} 0",
+        }
         return [], terms, [("jvp", "primal"), ("transpose", p["s"])]
     if prim == "reduce":
         n = len(p["s"])
@@ -363,15 +400,19 @@ def lean_spec(prim, p):
         terms = {"primal": primal, "jvp": f"reduceJvp (s := {S}) lastNotOne 1 {D} PROOF0 0 0"}
         return [(f"List.Nodup {D}", ())], terms, [("jvp", "primal")]
     if prim == "broadcast_in_dim":
-        m, n = len(p["so"]), len(p["shape"])
+        n = len(p["shape"])
         SO, SH = lshape(p["so"]), lshape(p["shape"])
         BD = f"(dims {n} [{', '.join(map(str, p['bd']))}])"
         primal = f"broadcastInDim (so := {SO}) {SH} {BD} PROOF0 PROOF1 0"
-        terms = {"primal": primal,
-                 "jvp": f"broadcastInDimJvp (so := {SO}) {SH} {BD} PROOF0 PROOF1 0 0",
-                 "transpose": f"broadcastInDimTranspose {SO} {SH} {BD} PROOF1 0"}
-        args = [(f"BroadcastsTo {SO} ({SH} ∘ {BD})", ("BroadcastsTo",)),
-                (f"Function.Injective {BD}", ())]
+        terms = {
+            "primal": primal,
+            "jvp": f"broadcastInDimJvp (so := {SO}) {SH} {BD} PROOF0 PROOF1 0 0",
+            "transpose": f"broadcastInDimTranspose {SO} {SH} {BD} PROOF1 0",
+        }
+        args = [
+            (f"BroadcastsTo {SO} ({SH} ∘ {BD})", ("BroadcastsTo",)),
+            (f"Function.Injective {BD}", ()),
+        ]
         return args, terms, [("jvp", "primal"), ("transpose", p["so"])]
     if prim == "expand_dims":
         S, D = lshape(p["s"]), lfinset(p["dims"], "ℕ")
@@ -411,35 +452,62 @@ def neg_args(args):
 # and that JAX returns the shape that the model's result type would have.
 EXPECTED = {
     "reshape-size": (
-        "`_reshape_shape_rule` does not check that the sizes agree; "
-        "it is a constraint of StableHLO `reshape`, a proof argument in the model",
-        lambda prim, p, rec: prim == "reshape" and "error" not in rec["primal"]
-        and math.prod(p["s"]) != math.prod(p["new"]),
+        (
+            "`_reshape_shape_rule` does not check that the sizes agree; "
+            "it is a constraint of StableHLO `reshape`, a proof argument in the model"
+        ),
+        lambda prim, p, rec: (
+            prim == "reshape"
+            and "error" not in rec["primal"]
+            and math.prod(p["s"]) != math.prod(p["new"])
+        ),
         lambda p: lshape(p["new"]),
     ),
     "reduce-unique": (
-        "`_reduce_shape_rule` does not check that `dimensions` has no repetitions; "
-        "it is constraint (C5) of StableHLO `reduce`, a proof argument in the model",
-        lambda prim, p, rec: prim == "reduce" and "error" not in rec["primal"]
-        and len(set(p["dims"])) != len(p["dims"]),
-        lambda p: f"({lshape(p['s'])} ∘ keptAxes "
-                  f"([{', '.join(map(str, p['dims']))}] : List (Fin {len(p['s'])})).toFinset)",
+        (
+            "`_reduce_shape_rule` does not check that `dimensions` has no repetitions; "
+            "it is constraint (C5) of StableHLO `reduce`, a proof argument in the model"
+        ),
+        lambda prim, p, rec: (
+            prim == "reduce"
+            and "error" not in rec["primal"]
+            and len(set(p["dims"])) != len(p["dims"])
+        ),
+        lambda p: (
+            f"({lshape(p['s'])} ∘ keptAxes "
+            f"([{', '.join(map(str, p['dims']))}] : List (Fin {len(p['s'])})).toFinset)"
+        ),
     ),
     "unbroadcast-checks": (
-        "the assertion of `_unbroadcast` only runs under `jax_enable_checks`, "
-        "a proof argument in the model",
-        lambda prim, p, rec: prim == "unbroadcast" and not p["checks"]
-        and "error" not in rec["primal"]
-        and not all(a in (1, b) for a, b in zip(p["sa"], p["sx"])),
+        (
+            "the assertion of `_unbroadcast` only runs under `jax_enable_checks`, "
+            "a proof argument in the model"
+        ),
+        lambda prim, p, rec: (
+            prim == "unbroadcast"
+            and not p["checks"]
+            and "error" not in rec["primal"]
+            and not all(a in (1, b) for a, b in zip(p["sa"], p["sx"]))
+        ),
         lambda p: lshape(p["sa"]),
     ),
 }
 
 # The inputs that `jax.vjp` differentiates, whose shapes the cotangents must have.
-VJP_INPUTS = {"sin": ["s"], "cos": ["s"], "log": ["s"], "integer_pow": ["s"],
-              "mul": ["sx", "sy"], "div": ["sx", "sy"], "max": ["sx", "sy"], "pow": ["sx", "sy"],
-              "polynomial": ["sx"], "reduce_sum": ["s"], "reduce": ["s"],
-              "broadcast_in_dim": ["so"]}
+VJP_INPUTS = {
+    "sin": ["s"],
+    "cos": ["s"],
+    "log": ["s"],
+    "integer_pow": ["s"],
+    "mul": ["sx", "sy"],
+    "div": ["sx", "sy"],
+    "max": ["sx", "sy"],
+    "pow": ["sx", "sy"],
+    "polynomial": ["sx"],
+    "reduce_sum": ["s"],
+    "reduce": ["s"],
+    "broadcast_in_dim": ["so"],
+}
 
 
 def assertions(prim, p, rec):
@@ -482,11 +550,13 @@ def assertions(prim, p, rec):
             out.append(("user_jvp rejects", "False", "decide"))
         else:
             for n in jvps:
-                out.append((f"user_jvp = {n}", f"{llist(rec['user_jvp']['shape'])} = {ref(n)}",
-                            "decide"))
+                out.append(
+                    (f"user_jvp = {n}", f"{llist(rec['user_jvp']['shape'])} = {ref(n)}", "decide")
+                )
     if "user_vjp" in rec and vjp:
-        conj = " ∧ ".join(f"({ref(t)} = {ref(o) if isinstance(o, str) else llist(o)})"
-                          for t, o in vjp)
+        conj = " ∧ ".join(
+            f"({ref(t)} = {ref(o) if isinstance(o, str) else llist(o)})" for t, o in vjp
+        )
         if "error" in rec["user_vjp"]:
             out.append(("user_vjp rejects", f"¬ ({conj})", "decide"))
         else:
@@ -524,15 +594,18 @@ def case_id(prim, p):
 
 def write_lean(path, items, split):
     """Write one example per item, or one per assertion if `split`. Returns line → (case index, name)."""
-    lines = HEADER.splitlines()
+    lines: list[str] = [*HEADER.splitlines()]
     where = {}
     for idx, (cid, asserts) in items:
         lines.append(f"-- {cid}")
         for group in ([a] for a in asserts) if split else [asserts]:
             props = " ∧ ".join(f"({prop})" for _, prop, _ in group)
             tacs = [tac for _, _, tac in group]
-            proof = (f"by {tacs[0]}" if len(set(tacs)) == 1
-                     else "⟨" + ", ".join(f"by {t}" for t in tacs) + "⟩")
+            proof = (
+                f"by {tacs[0]}"
+                if len(set(tacs)) == 1
+                else "⟨" + ", ".join(f"by {t}" for t in tacs) + "⟩"
+            )
             lines.append(f"example : {props} := {proof}")
             where[len(lines)] = (idx, " ∧ ".join(name for name, _, _ in group))
     path.write_text("\n".join(lines) + "\n")
@@ -541,8 +614,13 @@ def write_lean(path, items, split):
 
 def lean(path):
     """Check a Lean file, reporting every error."""
-    return subprocess.run(["lake", "env", "lean", "-DmaxErrors=1000000", str(path.relative_to(ROOT))],
-                          cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run(
+        ["lake", "env", "lean", "-DmaxErrors=1000000", str(path.relative_to(ROOT))],
+        check=False,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
 
 
 def run_lean(path):
@@ -571,9 +649,9 @@ def reduce_file(path, items):
     """Print the model's shapes for the failing cases with `#reduce`."""
     lines = [HEADER]
     for _, (cid, terms) in items:
-        lines.append(f"#eval IO.println \"-- {cid.replace('\"', '')}\"")
+        lines.append(f'#eval IO.println "-- {cid.replace('"', "")}"')
         for name, term in terms:
-            lines.append(f"#eval IO.println \"{name}:\"")
+            lines.append(f'#eval IO.println "{name}:"')
             lines.append(f"#reduce shapeOf ({term})")
     path.write_text("\n".join(lines) + "\n")
     run = lean(path)
@@ -610,13 +688,18 @@ def main():
         path = GEN / f"Shapes{i}.lean"
         wheres[path] = write_lean(path, items[i::nfiles], split=False)
         files.append(path)
-    (GEN / "records.json").write_text(json.dumps(
-        [{"case": case_id(*c), "jax": r} for c, r in zip(cases, records)], indent=1))
+    (GEN / "records.json").write_text(
+        json.dumps([{"case": case_id(*c), "jax": r} for c, r in zip(cases, records)], indent=1)
+    )
     results = run_lean_files(files, args.jobs)
     t2 = time.time()
 
-    stray = [(f, line, errs[line][0]) for f, errs in results.items() for line in errs
-             if line not in wheres[f]]
+    stray = [
+        (f, line, errs[line][0])
+        for f, errs in results.items()
+        for line in errs
+        if line not in wheres[f]
+    ]
     if stray:
         for f, line, err in stray:
             print(f"{f.relative_to(ROOT)}:{line}: {err}", file=sys.stderr)
@@ -632,8 +715,10 @@ def main():
         print(f"  {prim}: {count}")
     for key, idxs in expected.items():
         bad = [i for i in idxs if i in failing]
-        print(f"  expected disagreement {key}: {len(idxs)} cases ({EXPECTED[key][0]})"
-              + (f", {len(bad)} not as expected" if bad else ""))
+        print(
+            f"  expected disagreement {key}: {len(idxs)} cases ({EXPECTED[key][0]})"
+            + (f", {len(bad)} not as expected" if bad else "")
+        )
     if not failing:
         print("shapes: ok")
         return 0

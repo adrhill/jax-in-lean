@@ -29,6 +29,7 @@ lake build           # build and check all proofs
 scripts/audit.sh     # required before every commit
 uv sync              # install the pinned JAX into .venv
 uv run python ...    # run a reproducer against real JAX
+prek install         # once: run ruff and ty from `prek.toml` on every commit
 ```
 
 The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.

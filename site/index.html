@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bugs in JAX</title>
+<meta name="description" content="Bugs in JAX found by modelling it in Lean 4, each with a reproducer run on the pinned JAX.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Almendra+SC&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+<style>
+:root {
+  --desk: #52473a;
+  --vellum: #f0e9d8;
+  --ink: #26201a;
+  --ink-faded: #5a4f40;
+  --rubric: #9b1c1c;
+  --gold: #9c7a2a;
+  --lapis: #1f3a93;
+  --verdigris: #2f6b45;
+  --rule: #b3a383;
+  --code: #e6dcc6;
+  --serif: "EB Garamond", Garamond, Georgia, serif;
+  --caps: "Almendra SC", "EB Garamond", serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --desk: #0b0a08;
+    --vellum: #211d17;
+    --ink: #e8dfcc;
+    --ink-faded: #bdb09a;
+    --rubric: #e0614f;
+    --gold: #cfa94f;
+    --lapis: #9db0ff;
+    --verdigris: #7fbf8f;
+    --rule: #564b3a;
+    --code: #17140f;
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--desk); }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  font: 18px/1.6 var(--serif);
+  background: var(--desk);
+  padding: 32px 16px 64px;
+}
+.leaf {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 56px 40px;
+  background: var(--vellum);
+  border: 1px solid var(--rule);
+  outline: 3px double var(--gold);
+  outline-offset: -14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+a { color: var(--lapis); text-decoration: none; border-bottom: 1px dotted currentColor; }
+a:hover { color: var(--rubric); }
+code {
+  font-family: var(--mono); font-size: 0.84em; color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 9%, transparent); padding: 0.05em 0.25em; border-radius: 3px;
+}
+
+header { text-align: center; margin-bottom: 8px; }
+.incipit { font-family: var(--caps); color: var(--rubric); letter-spacing: 0.12em; font-size: 0.95rem; margin: 0; }
+h1 { font-family: var(--caps); font-weight: 400; font-size: clamp(2.4rem, 8vw, 3.6rem); line-height: 1.05; margin: 6px 0 2px; letter-spacing: 0.02em; }
+h1 .initial { color: var(--rubric); }
+.subtitle { font-family: var(--caps); font-size: 1.15rem; color: var(--ink-faded); margin: 0 0 12px; letter-spacing: 0.06em; }
+.lede { font-style: italic; color: var(--ink-faded); max-width: 36em; margin: 0 auto; }
+.meta { font-family: var(--caps); font-size: 0.85rem; color: var(--ink-faded); margin: 10px 0 0; letter-spacing: 0.04em; }
+.meta code { font-size: 0.85em; }
+
+.fleuron { text-align: center; color: var(--gold); font-size: 1.4rem; margin: 22px 0; letter-spacing: 0.6em; user-select: none; }
+
+.tally { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 0; margin: 0; padding: 0; list-style: none; }
+.tally button {
+  font: inherit; color: inherit; background: none; border: 0; cursor: pointer;
+  padding: 4px 18px; text-align: center; border-left: 1px solid var(--rule);
+}
+.tally li:first-child button { border-left: 0; }
+.tally .num { display: block; font-family: var(--caps); font-size: 1.7rem; line-height: 1.1; color: var(--rubric); }
+.tally .lab { display: block; font-family: var(--caps); font-size: 0.95rem; }
+.tally button[aria-pressed="true"] .lab { text-decoration: underline; text-decoration-color: var(--gold); text-underline-offset: 4px; text-decoration-thickness: 2px; }
+
+.seek { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: baseline; justify-content: center; margin: 18px 0 20px; }
+.seek label { font-family: var(--caps); color: var(--rubric); }
+.seek input, .seek select {
+  font: italic 1rem var(--serif); color: var(--ink); background: transparent;
+  border: 0; border-bottom: 1px solid var(--rule); padding: 2px 4px; min-width: 0;
+}
+.seek input { width: 16em; max-width: 100%; }
+.seek input:focus, .seek select:focus { outline: none; border-bottom-color: var(--rubric); }
+.seek select option { background: var(--vellum); }
+.count { font-style: italic; color: var(--ink-faded); font-size: 0.9rem; }
+
+/* The reports are laid out like GitHub issues, in the inks of the manuscript. */
+.gh {
+  --gh-bg: #f7f2e6; --gh-subtle: #e8dfcb; --gh-ochre: #85560a; --gh-murrey: #6f2b62;
+  --gh-border: var(--rule); --gh-fg: var(--ink); --gh-muted: var(--ink-faded);
+  --gh-accent: var(--lapis); --gh-success: var(--verdigris); --gh-danger: var(--rubric);
+  --gh-danger-subtle: color-mix(in srgb, var(--rubric) 12%, transparent);
+  --gh-code: color-mix(in srgb, var(--ink) 9%, transparent);
+  --gh-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --gh-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font: 14px/1.5 var(--gh-sans); color: var(--gh-fg);
+}
+@media (prefers-color-scheme: dark) {
+  .gh { --gh-bg: #2a251d; --gh-subtle: #171410; --gh-ochre: var(--gold); --gh-murrey: #d3a3cf; }
+}
+.gh a { color: var(--gh-accent); border: 0; }
+.gh a:hover { color: var(--gh-accent); text-decoration: underline; }
+.gh code {
+  font: 85%/1.4 var(--gh-mono); color: inherit; background: var(--gh-code);
+  padding: 0.2em 0.4em; border-radius: 6px;
+}
+
+.s-found { --c: var(--ink-faded); }
+.s-refuted { --c: var(--rubric); }
+.s-reported { --c: var(--lapis); }
+.s-fixed { --c: var(--verdigris); }
+
+details.caput { margin: 0; padding: 12px 0; border-top: 1px solid var(--rule); }
+details.caput:first-child { border-top: 0; }
+details.caput > summary { list-style: none; cursor: pointer; position: relative; padding-left: 22px; }
+details.caput > summary::-webkit-details-marker { display: none; }
+details.caput > summary::before {
+  content: "›"; position: absolute; left: 4px; top: 0; font-size: 1.2em; line-height: 1.2; color: var(--ink-faded);
+  transition: transform 0.15s;
+}
+details.caput[open] > summary::before { transform: rotate(90deg); }
+.title { font-size: 1.15rem; font-weight: 500; line-height: 1.4; }
+/* The facts of a bug, in the same columns for every bug. */
+.facts {
+  display: grid; grid-template-columns: 7ch 16ch 8ch 11ch minmax(0, 1fr) 6ch; gap: 0 12px;
+  margin: 6px 0 0; font: 0.68rem/1.45 var(--mono);
+}
+.facts div { min-width: 0; }
+.facts dt { font-family: var(--caps); font-size: 0.72rem; letter-spacing: 0.04em; color: var(--ink-faded); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.facts code { font: inherit; }
+.facts dd code { background: none; padding: 0; }
+.facts a { border-bottom-style: solid; border-bottom-color: color-mix(in srgb, currentColor 40%, transparent); }
+.facts .st { font-weight: 700; color: var(--c); }
+.facts .none { color: var(--rule); }
+/* On a narrow page: three columns, or two, and the theorem on a row of its own. */
+@media (max-width: 860px) {
+  .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; }
+  .facts .wide { grid-column: 1 / -1; order: 1; }
+}
+@media (max-width: 480px) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* An opened report looks like a GitHub issue. */
+.caput > .gh {
+  margin: 12px 0 4px 22px; padding: 16px;
+  background: var(--gh-bg); border: 1px solid var(--gh-border); border-radius: 6px;
+}
+.gh h3 { font-size: 14px; font-weight: 600; margin: 20px 0 8px; }
+.gh h3:first-child { margin-top: 0; }
+.gh .desc p { margin: 0 0 12px; }
+.gh .desc > :last-child { margin-bottom: 0; }
+.gh pre {
+  margin: 0; padding: 16px; overflow-x: auto; background: var(--gh-subtle); border-radius: 6px;
+  font: 85%/1.45 var(--gh-mono); color: var(--gh-fg);
+}
+.gh pre code { font-size: 100%; background: none; padding: 0; border-radius: 0; }
+.hljs-keyword { color: var(--gh-danger); }
+.hljs-built_in { color: var(--gh-ochre); }
+.hljs-string { color: var(--gh-success); }
+.hljs-number, .hljs-literal { color: var(--gh-accent); }
+.hljs-comment { color: var(--gh-muted); font-style: italic; }
+.hljs-title { color: var(--gh-murrey); }
+.copy {
+  position: absolute; top: 8px; right: 8px; cursor: pointer;
+  font: 500 12px/20px var(--gh-sans); color: var(--gh-fg); background: var(--gh-bg);
+  border: 1px solid var(--gh-border); border-radius: 6px; padding: 2px 8px;
+}
+.copy:hover { background: var(--gh-subtle); }
+
+/* A reproducer: its code, and below each print the output that its comments state. */
+.repro { position: relative; padding: 10px 0; overflow-x: auto; background: var(--gh-subtle); border-radius: 6px; }
+.repro pre { padding: 2px 16px; background: none; border-radius: 0; overflow: visible; }
+.out { width: fit-content; min-width: min(22em, calc(100% - 32px)); margin: 6px 16px 14px; overflow: hidden; background: var(--gh-bg); border: 1px solid var(--gh-border); border-radius: 6px; }
+.out > div { display: grid; grid-template-columns: 5.5em 1fr; align-items: baseline; padding: 5px 14px 5px 12px; }
+.out > div + div { border-top: 1px solid var(--gh-border); }
+.out span { font: 600 11px/1.45 var(--gh-sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--gh-muted); }
+.out pre { padding: 0; }
+.out .desired span { color: var(--gh-success); }
+.out .actual span { color: var(--gh-danger); }
+.out .actual { background: var(--gh-danger-subtle); }
+.gh svg { fill: currentColor; }
+.empty, .error { text-align: center; font-style: italic; color: var(--ink-faded); padding: 24px 0; }
+
+footer { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--rule); font-size: 0.9rem; color: var(--ink-faded); text-align: center; }
+footer p { margin: 0 auto 6px; max-width: 40em; }
+.glossary { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; max-width: 40em; margin: 0 auto 14px; text-align: left; }
+.glossary dt { font-family: var(--caps); color: var(--rubric); }
+.glossary dd { margin: 0; }
+@media (max-width: 640px) { .glossary { grid-template-columns: 1fr; gap: 0; } .glossary dd { margin-bottom: 8px; } }
+
+@media (max-width: 640px) {
+  body { padding: 12px 8px 32px; font-size: 17px; }
+  .leaf { padding: 32px 22px 28px; outline-offset: -9px; }
+  .tally button { padding: 4px 10px; }
+  .caput > .gh { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<main class="leaf">
+  <header>
+    <p class="incipit">Here beginneth</p>
+    <h1><span class="initial">B</span>ugs in JAX</h1>
+    <p class="subtitle">as found with Lean</p>
+    <p class="lede">
+      Being a true account of the bugs that dwell in the differentiation rules of
+      <a href="https://github.com/jax-ml/jax">JAX</a>, each one tracked down by
+      modelling its <code>lax</code> primitives in Lean 4 and proving what they promise.
+    </p>
+    <p class="meta" id="meta"></p>
+  </header>
+
+  <div class="fleuron" aria-hidden="true">❦</div>
+
+  <ul class="tally" id="tally"></ul>
+
+  <div class="seek">
+    <label for="q">Seek</label>
+    <input id="q" type="search" placeholder="a word, a primitive, a rule…">
+    <select id="prim" aria-label="Primitive"><option value="">of every primitive</option></select>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div id="bugs"><p class="empty">The scribe is at work…</p></div>
+
+  <footer>
+    <dl class="glossary">
+      <dt>Found</dt>
+      <dd>A Python reproducer shows the bug on the pinned JAX.</dd>
+      <dt>Refuted</dt>
+      <dd>
+        Found, and also proven in Lean.
+        We transcribe JAX's rule from its source into Lean, as written.
+        A theorem then proves that this transcription is wrong,
+        for example that a JVP rule does not compute the derivative,
+        by a concrete counterexample.
+        The proof explains the bug,
+        and carries over to JAX as far as the model is faithful to the source.
+      </dd>
+      <dt>Reported</dt>
+      <dd>An upstream issue exists.</dd>
+      <dt>Fixed</dt>
+      <dd>A JAX release contains a fix.</dd>
+    </dl>
+    <p id="source"></p>
+  </footer>
+</main>
+<script>
+const STATUSES = ["found", "refuted", "reported", "fixed"];
+const state = { status: "", prim: "", q: "" };
+let data = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const md = (s) => (window.marked ? marked.parse(s) : `<p>${esc(s)}</p>`);
+const mdInline = (s) => (window.marked ? marked.parseInline(s) : esc(s));
+
+function ordinal(n) {
+  const suffix = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+}
+
+function jaxLink(bug) {
+  const [path, line] = bug.source.split(":");
+  const url = `https://github.com/jax-ml/jax/blob/jax-v${bug.jax_version}/${path}#L${line}`;
+  return `<a href="${url}" title="${esc(bug.source)}">${esc(bug.source.replace(/^.*\//, ""))}</a>`;
+}
+function leanLink(bug) {
+  const name = bug.lean_refutation.replace(/^Jax\.Lax\./, "");
+  if (!data.repository || !data.commit || !bug.lean_location) return `<code title="${esc(bug.lean_refutation)}">${esc(name)}</code>`;
+  const [path, line] = bug.lean_location.split(":");
+  return `<a href="${data.repository}/blob/${data.commit}/${path}#L${line}" title="${esc(bug.lean_refutation)} at ${esc(bug.lean_location)}">${esc(name)}</a>`;
+}
+function issueLink(url) {
+  const m = url.match(/github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)/);
+  return `<a href="${url}" title="${esc(m ? `${m[1]}#${m[2]}` : url)}">${esc(m ? `#${m[2]}` : url)}</a>`;
+}
+const row = (label, text) => `<div class="${label}"><span>${label}</span><pre>${esc(text)}</pre></div>`;
+// The parts of a reproducer, as split by scripts/bugs.py: code, and outputs with their desired and actual text.
+function reproducer(bug) {
+  return bug.parts.map((part) => {
+    if (typeof part === "string") {
+      const code = part.replace(/^\n+|\n+$/g, "");
+      return code ? `<pre><code class="language-python">${esc(code)}</code></pre>` : "";
+    }
+    return part.desired === part.actual
+      ? `<div class="out">${row("output", part.actual)}</div>`
+      : `<div class="out bug">${row("desired", part.desired)}${row("actual", part.actual)}</div>`;
+  }).join("");
+}
+function render(bug) {
+  const none = `<span class="none">–</span>`;
+  const facts = [
+    ["Status", `<span class="st">${esc(bug.status)}</span>`],
+    ["Primitive", esc(bug.primitive)],
+    ["JAX", esc(bug.jax_version) + (bug.fixed_in ? ` → ${esc(bug.fixed_in)}` : "")],
+    ["Source", jaxLink(bug)],
+    ["Lean refutation", bug.lean_refutation ? leanLink(bug) : none],
+    ["Issue", bug.upstream_issue ? issueLink(bug.upstream_issue) : none],
+  ];
+  return `<details class="caput s-${bug.status}" id="${esc(bug.name)}">
+    <summary>
+      <div class="title">${mdInline(bug.title)}</div>
+      <dl class="facts">${facts.map(([k, val]) => `<div${k === "Lean refutation" ? ' class="wide"' : ""}><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>
+    </summary>
+    <div class="gh">
+      <h3>Description</h3>
+      <div class="desc">${md(bug.description.join("\n"))}</div>
+      <h3>Reproducer</h3>
+      <div class="repro"><button class="copy" type="button" data-bug="${esc(bug.name)}">Copy</button>${reproducer(bug)}</div>
+    </div>
+  </details>`;
+}
+
+function matches(bug) {
+  if (state.status && bug.status !== state.status) return false;
+  if (state.prim && bug.primitive !== state.prim) return false;
+  if (!state.q) return true;
+  const hay = [bug.name, bug.title, bug.primitive, bug.source, bug.lean_refutation || "", ...bug.description].join(" ").toLowerCase();
+  return state.q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+}
+
+function renderTally() {
+  const counts = { "": data.bugs.length };
+  for (const s of STATUSES) counts[s] = data.bugs.filter((b) => b.status === s).length;
+  $("tally").innerHTML = ["", ...STATUSES].map((s) => `<li><button type="button" data-status="${s}" aria-pressed="${state.status === s}">
+      <span class="num">${counts[s]}</span>
+      <span class="lab">${s || "all bugs"}</span></button></li>`).join("");
+}
+
+function renderList() {
+  const shown = data.bugs.filter(matches);
+  $("bugs").innerHTML = shown.length
+    ? shown.map(render).join("")
+    : `<p class="empty">No such bug is recorded here.</p>`;
+  $("count").textContent = shown.length === data.bugs.length ? "" : `${shown.length} of ${data.bugs.length} shown`;
+  if (window.hljs) document.querySelectorAll("#bugs code.language-python").forEach((el) => hljs.highlightElement(el));
+  openHash();
+}
+
+function openHash() {
+  const el = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  if (el && el.tagName === "DETAILS") { el.open = true; el.scrollIntoView({ block: "start" }); }
+}
+
+function update() { renderTally(); renderList(); }
+
+async function main() {
+  try {
+    const res = await fetch("bugs.json", { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (e) {
+    $("bugs").innerHTML = `<p class="error">The scroll <code>bugs.json</code> could not be read (${esc(e.message)}). Build the site with <code>uv run python scripts/site.py</code> and serve <code>_site/</code>.</p>`;
+    return;
+  }
+  const versions = [...new Set(data.bugs.map((b) => b.jax_version))].join(", ");
+  const built = new Date(data.built);
+  const date = `the ${ordinal(built.getUTCDate())} day of ${built.toLocaleString("en", { month: "long", timeZone: "UTC" })}, anno Domini ${built.getUTCFullYear()}`;
+  const commit = data.commit
+    ? data.repository ? `<a href="${data.repository}/tree/${data.commit}"><code>${data.commit.slice(0, 7)}</code></a>` : `<code>${data.commit.slice(0, 7)}</code>`
+    : "";
+  $("meta").innerHTML = `Found on JAX ${esc(versions)} · Set down ${date}${commit ? ` · at ${commit}` : ""}`;
+  if (data.repository) $("source").innerHTML = `The scribes keep their sources at <a href="${data.repository}">${esc(data.repository.replace(/^https:\/\//, ""))}</a>.`;
+
+  const prims = [...new Set(data.bugs.map((b) => b.primitive))].sort();
+  $("prim").innerHTML += prims.map((p) => `<option value="${esc(p)}">of ${esc(p)}</option>`).join("");
+
+  $("tally").addEventListener("click", (e) => {
+    const t = e.target.closest("button");
+    if (!t) return;
+    state.status = state.status === t.dataset.status ? "" : t.dataset.status;
+    update();
+  });
+  $("prim").addEventListener("change", (e) => { state.prim = e.target.value; renderList(); });
+  $("q").addEventListener("input", (e) => { state.q = e.target.value.trim(); renderList(); });
+  $("bugs").addEventListener("click", async (e) => {
+    const b = e.target.closest(".copy");
+    if (!b) return;
+    try {
+      const bug = data.bugs.find((x) => x.name === b.dataset.bug);
+      await navigator.clipboard.writeText(`${bug.reproducer.join("\n")}\n`);
+      b.textContent = "Copied!";
+    } catch { b.textContent = "Copy failed"; }
+    setTimeout(() => (b.textContent = "Copy"), 1500);
+  });
+  window.addEventListener("hashchange", openHash);
+  update();
+}
+main();
+</script>
+</body>
+</html>
