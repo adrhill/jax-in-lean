@@ -130,6 +130,18 @@ theorem Tensor.Same.unique {s : Shape m} {t : Shape n} {a : Tensor (Index s)}
   let i : Index s := fun d => ⟨j d, by rw [hs d]; exact (j d).isLt⟩
   exact (hv i j fun _ => rfl).symm.trans (hv' i j fun _ => rfl)
 
+/-- Sums over the indices of two shapes with the same sizes agree
+if the summands agree at indices with the same values. -/
+theorem sum_filter_index_congr {s t : Shape n} (hst : ∀ d, s d = t d) {P : Index s → Prop}
+    {Q : Index t → Prop} [DecidablePred P] [DecidablePred Q] {M : Type} [AddCommMonoid M]
+    (f : Index s → M) (g : Index t → M)
+    (hPQ : ∀ i j, (∀ d, (i d : ℕ) = j d) → (P i ↔ Q j))
+    (hfg : ∀ i j, (∀ d, (i d : ℕ) = j d) → f i = g j) :
+    ∑ i with P i, f i = ∑ j with Q j, g j := by
+  rw [Finset.sum_filter, Finset.sum_filter]
+  exact Fintype.sum_equiv (Equiv.piCongrRight fun d => finCongr (hst d)) _ _ fun i =>
+    if_congr (hPQ i _ fun _ => rfl) (hfg i _ fun _ => rfl) rfl
+
 /-- A linear primitive is its own JVP rule.
 `ad.deflinear2` registers `linear_jvp`, `jax/_src/interpreters/ad.py:942`,
 which applies the primitive to the tangent: `primitive.bind(*tangents, **params)`. -/

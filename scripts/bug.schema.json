@@ -12,7 +12,7 @@
       "type": "string"
     },
     "status": {
-      "description": "found: the reproducer shows the bug. refuted: a Lean theorem refutes the rule. reported: an upstream issue exists. fixed: a JAX release contains a fix.",
+      "description": "found: the reproducer shows the bug. refuted: the reproducer shows the bug, and a Lean theorem refutes our model of the rule. reported: an upstream issue exists. fixed: a JAX release contains a fix.",
       "enum": ["found", "refuted", "reported", "fixed"]
     },
     "primitive": {
@@ -29,7 +29,7 @@
       "pattern": "^jax/_src/.+\\.py:[0-9]+$"
     },
     "lean_refutation": {
-      "description": "The fully qualified name of the Lean theorem that refutes the rule, if the model covers it.",
+      "description": "The fully qualified name of the Lean theorem that refutes our model of the rule, if the model covers it.",
       "type": ["string", "null"]
     },
     "upstream_issue": {

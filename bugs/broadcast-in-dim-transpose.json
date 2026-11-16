@@ -1,11 +1,11 @@
 {
   "$schema": "../scripts/bug.schema.json",
   "title": "`broadcast_in_dim` cannot be transposed for non-increasing `broadcast_dimensions`",
-  "status": "found",
+  "status": "refuted",
   "primitive": "broadcast_in_dim",
   "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:7543",
-  "lean_refutation": null,
+  "lean_refutation": "Jax.Lax.broadcastInDimTranspose_not_correct",
   "upstream_issue": null,
   "description": [
     "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order.",
