@@ -1,0 +1,13 @@
+# Lean
+.lake/
+
+# Python
+.venv/
+__pycache__/
+*.py[oc]
+
+# Nix / direnv
+.direnv/
+result
+
+.DS_Store

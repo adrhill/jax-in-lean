@@ -1,0 +1,13 @@
+[project]
+name = "jax-in-lean"
+version = "0.1.0"
+description = "The JAX version modelled in Lean, for reading its source and running reproducers"
+requires-python = ">=3.15"
+dependencies = [
+    # Exact pin: every Lean definition cites a line of this version's source.
+    "jax==0.12.0.1",
+    "jaxlib==0.12.0.1",
+]
+
+[tool.uv]
+package = false

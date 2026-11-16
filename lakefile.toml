@@ -1,0 +1,14 @@
+name = "jax-in-lean"
+defaultTargets = ["Jax"]
+
+[leanOptions]
+autoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.35.0"
+
+# Model of JAX and proofs about it.
+[[lean_lib]]
+name = "Jax"
