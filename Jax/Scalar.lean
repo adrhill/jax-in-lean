@@ -2,8 +2,10 @@ module
 
 public import Mathlib.Analysis.SpecialFunctions.Log.Basic
 public import Mathlib.Analysis.SpecialFunctions.Pow.Real
+public import Mathlib.Analysis.SpecialFunctions.Sqrt
 public import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
 public import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+public import Mathlib.Basic.Real.Sign
 
 /-!
 # Scalars
@@ -88,6 +90,19 @@ protected def log : Scalar → Scalar
   | posInf => posInf
   | _ => nan
 
+/-- Exponential. `exp(-∞) = 0` and `exp(+∞) = +∞`. -/
+protected def exp : Scalar → Scalar
+  | fin x => fin (Real.exp x)
+  | posInf => posInf
+  | negInf => fin 0
+  | nan => nan
+
+/-- Square root. NaN at negative numbers and at `-∞`, and `sqrt(+∞) = +∞`. -/
+protected def sqrt : Scalar → Scalar
+  | fin x => if 0 ≤ x then fin (Real.sqrt x) else nan
+  | posInf => posInf
+  | _ => nan
+
 open scoped Classical in
 /-- Power, as `pow` of IEEE 754.
 `x ^ 0 = 1` and `1 ^ y = 1` for every `x` and `y`, even NaN.
@@ -117,6 +132,43 @@ protected def max : Scalar → Scalar → Scalar
   | negInf, y => y
   | x, negInf => x
 
+/-- Minimum. NaN if either argument is NaN. -/
+protected def min : Scalar → Scalar → Scalar
+  | fin x, fin y => fin (x ⊓ y)
+  | nan, _ | _, nan => nan
+  | negInf, _ | _, negInf => negInf
+  | posInf, y => y
+  | x, posInf => x
+
+/-- Absolute value. `|±∞| = +∞`. -/
+protected def abs : Scalar → Scalar
+  | fin x => fin |x|
+  | nan => nan
+  | _ => posInf
+
+/-- Sign: `-1`, `0` or `1`, and NaN at NaN. -/
+protected def sign : Scalar → Scalar
+  | fin x => fin (Real.sign x)
+  | posInf => fin 1
+  | negInf => fin (-1)
+  | nan => nan
+
+/-- Floor, the largest integer that is at most `x`. The infinities are unchanged. -/
+protected def floor : Scalar → Scalar
+  | fin x => fin ⌊x⌋
+  | x => x
+
+/-- The real number `q` rounded toward zero. -/
+def truncReal (q : ℝ) : ℝ := if 0 ≤ q then ⌊q⌋ else ⌈q⌉
+
+/-- Remainder, as `fmod` of C: `x - d * y`, where `d` is `x / y` rounded toward zero.
+The result has the sign of `x`.
+`x rem 0` and `±∞ rem y` are NaN, and `x rem ±∞ = x` for a finite `x`. -/
+protected def rem : Scalar → Scalar → Scalar
+  | fin x, fin y => if y = 0 then nan else fin (x - truncReal (x / y) * y)
+  | fin x, posInf | fin x, negInf => fin x
+  | _, _ => nan
+
 /-- The comparison `x > y`. False if either argument is NaN. -/
 protected def gt : Scalar → Scalar → Prop
   | fin x, fin y => x > y
@@ -126,6 +178,18 @@ protected def gt : Scalar → Scalar → Prop
 /-- The comparison `x == y`. False if either argument is NaN. -/
 protected def eq (x y : Scalar) : Prop := x = y ∧ x ≠ nan
 
+/-- The comparison `x != y`. True if either argument is NaN. -/
+protected def ne (x y : Scalar) : Prop := ¬ x.eq y
+
+/-- The comparison `x < y`. False if either argument is NaN. -/
+protected def lt (x y : Scalar) : Prop := y.gt x
+
+/-- The comparison `x >= y`. False if either argument is NaN. -/
+protected def ge (x y : Scalar) : Prop := x.gt y ∨ x.eq y
+
+/-- The comparison `x <= y`. False if either argument is NaN. -/
+protected def le (x y : Scalar) : Prop := y.gt x ∨ x.eq y
+
 /-! ## Finite values -/
 
 @[simp] theorem fin_add_fin (x y : ℝ) : fin x + fin y = fin (x + y) := rfl
@@ -134,14 +198,35 @@ protected def eq (x y : Scalar) : Prop := x = y ∧ x ≠ nan
 @[simp] theorem sin_fin (x : ℝ) : (fin x).sin = fin (Real.sin x) := rfl
 @[simp] theorem cos_fin (x : ℝ) : (fin x).cos = fin (Real.cos x) := rfl
 @[simp] theorem max_fin (x y : ℝ) : (fin x).max (fin y) = fin (x ⊔ y) := rfl
+@[simp] theorem min_fin (x y : ℝ) : (fin x).min (fin y) = fin (x ⊓ y) := rfl
 @[simp] theorem gt_fin (x y : ℝ) : (fin x).gt (fin y) ↔ x > y := Iff.rfl
 @[simp] theorem eq_fin (x y : ℝ) : (fin x).eq (fin y) ↔ x = y := by simp [Scalar.eq]
+@[simp] theorem exp_fin (x : ℝ) : (fin x).exp = fin (Real.exp x) := rfl
+@[simp] theorem abs_fin (x : ℝ) : (fin x).abs = fin |x| := rfl
+@[simp] theorem sign_fin (x : ℝ) : (fin x).sign = fin (Real.sign x) := rfl
+@[simp] theorem floor_fin (x : ℝ) : (fin x).floor = fin ⌊x⌋ := rfl
+@[simp] theorem ne_fin (x y : ℝ) : (fin x).ne (fin y) ↔ x ≠ y := by simp [Scalar.ne]
+@[simp] theorem lt_fin (x y : ℝ) : (fin x).lt (fin y) ↔ x < y := Iff.rfl
+@[simp] theorem ge_fin (x y : ℝ) : (fin x).ge (fin y) ↔ x ≥ y := by
+  simp [Scalar.ge, le_iff_lt_or_eq, eq_comm]
+@[simp] theorem le_fin (x y : ℝ) : (fin x).le (fin y) ↔ x ≤ y := by
+  simp [Scalar.le, le_iff_lt_or_eq]
 theorem zero_def : (0 : Scalar) = fin 0 := rfl
 theorem one_def : (1 : Scalar) = fin 1 := rfl
 
 theorem fin_div_fin (x : ℝ) {y : ℝ} (hy : y ≠ 0) : fin x / fin y = fin (x / y) := by
   show (if y = 0 then infWithSign x else fin (x / y)) = _
   simp [hy]
+
+theorem rem_fin (x : ℝ) {y : ℝ} (hy : y ≠ 0) :
+    (fin x).rem (fin y) = fin (x - truncReal (x / y) * y) := by
+  simp [Scalar.rem, hy]
+
+theorem sqrt_fin {x : ℝ} (hx : 0 ≤ x) : (fin x).sqrt = fin (Real.sqrt x) := by
+  simp [Scalar.sqrt, hx]
+
+theorem sqrt_fin_of_neg {x : ℝ} (hx : x < 0) : (fin x).sqrt = nan := by
+  simp [Scalar.sqrt, hx.not_ge]
 
 theorem log_fin {x : ℝ} (hx : 0 < x) : (fin x).log = fin (Real.log x) := by
   show (if 0 < x then fin (Real.log x) else _) = _

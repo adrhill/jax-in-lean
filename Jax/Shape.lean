@@ -178,6 +178,48 @@ theorem Index.merge_val_of_mem {s : Shape n} {D : Finset (Fin n)} (ax : List (Fi
     (Index.merge ax hax r j d : ℕ) = r ⟨ax.idxOf d, List.idxOf_lt_length_of_mem h⟩ := by
   simp [Index.merge, h]
 
+/-- An index on the axes `ax` as an index on the axes `ax'`, which are among them:
+axis `ax' k` keeps its index. -/
+def Index.reorder {s : Shape n} {ax ax' : List (Fin n)} (h : ∀ d ∈ ax', d ∈ ax)
+    (r : Index (s ∘ ax.get)) : Index (s ∘ ax'.get) :=
+  fun k => Fin.cast (by simp [List.getElem_idxOf])
+    (r ⟨ax.idxOf (ax'.get k), List.idxOf_lt_length_of_mem (h _ (List.get_mem _ _))⟩)
+
+private theorem Index.apply_val_congr {k : ℕ} {t : Fin k → ℕ} (r : (a : Fin k) → Fin (t a))
+    {a b : Fin k} (h : (a : ℕ) = b) : (r a : ℕ) = r b := by
+  obtain rfl := Fin.ext h
+  rfl
+
+/-- Merging does not depend on the order in which the axes are listed. -/
+theorem Index.merge_reorder {s : Shape n} {D : Finset (Fin n)} {ax ax' : List (Fin n)}
+    (hax : ∀ d, d ∈ ax ↔ d ∈ D) (hax' : ∀ d, d ∈ ax' ↔ d ∈ D) (r : Index (s ∘ ax.get))
+    (j : Index (s ∘ keptAxes D)) :
+    Index.merge ax' hax' (Index.reorder (fun d hd => (hax d).2 ((hax' d).1 hd)) r) j =
+      Index.merge ax hax r j := by
+  refine funext fun d => Fin.ext ?_
+  by_cases hd : d ∈ ax'
+  · have hd' : d ∈ ax := (hax d).2 ((hax' d).1 hd)
+    rw [Index.merge_val_of_mem _ _ _ _ hd, Index.merge_val_of_mem _ _ _ _ hd']
+    simp only [Index.reorder, Fin.val_cast]
+    exact Index.apply_val_congr r (by simp [List.getElem_idxOf])
+  · have hd' : d ∉ ax := fun h => hd ((hax' d).2 ((hax d).1 h))
+    simp [Index.merge, hd, hd']
+
+theorem Index.reorder_reorder {s : Shape n} {ax ax' : List (Fin n)} (hnd : ax.Nodup)
+    (h : ∀ d ∈ ax', d ∈ ax) (h' : ∀ d ∈ ax, d ∈ ax') (r : Index (s ∘ ax.get)) :
+    Index.reorder h' (Index.reorder h r) = r := by
+  refine funext fun k => Fin.ext ?_
+  simp only [Index.reorder, Fin.val_cast]
+  exact Index.apply_val_congr r (by simpa [List.getElem_idxOf] using List.get_idxOf hnd k)
+
+/-- Indices on two lists of the same axes without repetitions correspond to each other. -/
+def Index.reorderEquiv {s : Shape n} {ax ax' : List (Fin n)} (hnd : ax.Nodup) (hnd' : ax'.Nodup)
+    (h : ∀ d, d ∈ ax ↔ d ∈ ax') : Index (s ∘ ax.get) ≃ Index (s ∘ ax'.get) where
+  toFun := Index.reorder fun d => (h d).2
+  invFun := Index.reorder fun d => (h d).1
+  left_inv := Index.reorder_reorder hnd _ _
+  right_inv := Index.reorder_reorder hnd' _ _
+
 theorem keptAxes_surj {axes : Finset (Fin n)} {p : Fin n} (hp : p ∉ axes) :
     ∃ a, keptAxes axes a = p :=
   ⟨_, keptAxes_keptAxesIdx axes p hp⟩

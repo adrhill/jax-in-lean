@@ -1,18 +1,30 @@
 module
 
 public import Jax.Core
+public import Jax.Jaxpr.SelectNan
+public import Jax.Jaxpr.SqrtRelu
 public import Jax.Lax.BroadcastInDim
+public import Jax.Lax.Clamp
+public import Jax.Lax.Compare
 public import Jax.Lax.Cos
+public import Jax.Lax.Cumsum
 public import Jax.Lax.Div
+public import Jax.Lax.Dynamic
+public import Jax.Lax.Exp
 public import Jax.Lax.IntegerPow
 public import Jax.Lax.Log
 public import Jax.Lax.Max
 public import Jax.Lax.Mul
+public import Jax.Lax.Pad
 public import Jax.Lax.Polynomial
 public import Jax.Lax.Pow
 public import Jax.Lax.Primal
 public import Jax.Lax.Reduce
 public import Jax.Lax.ReduceSum
+public import Jax.Lax.Rem
+public import Jax.Lax.SelectN
 public import Jax.Lax.Sin
+public import Jax.Lax.Slice
+public import Jax.Lax.Sqrt
 public import Jax.Scalar
 public import Jax.Shape
