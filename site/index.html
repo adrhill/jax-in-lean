@@ -77,6 +77,12 @@ h1 .initial { color: var(--rubric); }
 .meta { font-family: var(--caps); font-size: 0.85rem; color: var(--ink-faded); margin: 10px 0 0; letter-spacing: 0.04em; }
 .meta code { font-size: 0.85em; }
 
+.caveat {
+  max-width: 41em; margin: 20px auto 0; padding: 10px 16px; text-align: center; text-wrap: balance; font-size: 0.95rem;
+  border: 1px solid var(--rubric); border-radius: 4px; background: color-mix(in srgb, var(--rubric) 8%, transparent);
+}
+.caveat strong { font-family: var(--caps); font-weight: 400; color: var(--rubric); letter-spacing: 0.06em; }
+
 .fleuron { text-align: center; color: var(--gold); font-size: 1.4rem; margin: 22px 0; letter-spacing: 0.6em; user-select: none; }
 
 .tally { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 0; margin: 0; padding: 0; list-style: none; }
@@ -225,6 +231,12 @@ footer p { margin: 0 auto 6px; max-width: 40em; }
     </p>
     <p class="meta" id="meta"></p>
   </header>
+
+  <p class="caveat" role="note">
+    <strong>Reader, be thou warned.</strong>
+    These accounts were conjured, not composed. An artificial scribe wrought the model, the proofs and the tellings,
+    proofread by no man. They may be false.
+  </p>
 
   <div class="fleuron" aria-hidden="true">❦</div>
 
