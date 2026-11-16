@@ -95,6 +95,19 @@ noncomputable def div (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Ten
     Tensor (Index (broadcastShape sx sy)) :=
   binop (· / ·) h x y
 
+/-- `lax.sub`, elementwise difference. `jax/_src/lax/lax.py:1251` -/
+noncomputable def sub (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
+    Tensor (Index (broadcastShape sx sy)) :=
+  binop (fun a b => a + -b) h x y
+
+/-- `lax.pow`, elementwise power `x ^ y` for a floating-point `y`. `jax/_src/lax/lax.py:942`.
+It lowers to [StableHLO `power`](https://openxla.org/stablehlo/spec#power),
+which is `pow` of IEEE 754 for floating-point arguments.
+Integer exponents are not modelled. -/
+noncomputable def pow (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
+    Tensor (Index (broadcastShape sx sy)) :=
+  binop Scalar.pow h x y
+
 /-- `lax.max`, elementwise maximum. `jax/_src/lax/lax.py:1385` -/
 noncomputable def max (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
     Tensor (Index (broadcastShape sx sy)) :=
@@ -167,6 +180,47 @@ def reduceSum {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (Index s))
     Tensor (Index (s ∘ keptAxes axes)) :=
   fun j => ∑ i with i.proj (keptAxes axes) = j, operand i
 
+/-! ## Reductions -/
+
+/-- The `computation` of `lax.reduce` with one operand, traced to the jaxpr `jaxpr` of `reduce_p`. -/
+structure Computation where
+  /-- The function of two scalars that the jaxpr computes. -/
+  op : Scalar → Scalar → Scalar
+  /-- The JVP `jvp x y dx dy` of `op` that `api.jvp` derives from the jaxpr. -/
+  jvp : Scalar → Scalar → Scalar → Scalar → Scalar
+
+/-- The axes in `D` in increasing order. -/
+def sortedAxes (D : Finset (Fin n)) : List (Fin n) := (List.finRange n).filter (· ∈ D)
+
+theorem mem_sortedAxes {D : Finset (Fin n)} {d : Fin n} : d ∈ sortedAxes D ↔ d ∈ D := by
+  simp [sortedAxes]
+
+/-- The entries of `x` along the axes `ax` at the position `j` of the other axes,
+in row-major order of the axes `ax`, in the order in which `ax` lists them. -/
+def reductionSlice {s : Shape n} {D : Finset (Fin n)} (ax : List (Fin n)) (hax : ∀ d, d ∈ ax ↔ d ∈ D)
+    (x : Tensor (Index s)) (j : Index (s ∘ keptAxes D)) : Fin (∏ k, (s ∘ ax.get) k) → Scalar :=
+  fun p => x (Index.merge ax hax (Index.rowMajor.symm p) j)
+
+/-- `lax.reduce` with one operand and one initial value, which reduces the operand over `dimensions`
+with `computation.op`. The result keeps the other axes in order.
+`jax/_src/lax/lax.py:3260`; `out_sharding` is dropped.
+Reductions that `_get_monoid_reducer` recognizes, `jax/_src/lax/lax.py:3351`, such as `add` with `0`,
+bind `reduce_sum` and the like instead; this is the primitive `reduce_p` of all other reductions.
+
+[StableHLO `reduce`](https://openxla.org/stablehlo/spec#reduce) evaluates an implementation-defined
+binary tree whose in-order traversal is the entries of the slice in ascending lexicographic order of their
+index, interspersed with `init_values` at implementation-defined positions.
+The model takes the left fold `body(… body(body(init, x₀), x₁) …, xₖ)`, which is such a tree.
+The `lax.reduce` docstring requires that `computation` and `init_values` form a monoid;
+then every such tree gives the left fold.
+The proof `_hd` is constraint (C5) of StableHLO `reduce`, `is_unique(dimensions)`;
+`_reduce_shape_rule`, `jax/_src/lax/lax.py:9055`, does not check it. -/
+def reduce {s : Shape n} (computation : Computation) (initValue : Scalar) (dimensions : List (Fin n))
+    (_hd : dimensions.Nodup) (operand : Tensor (Index s)) :
+    Tensor (Index (s ∘ keptAxes dimensions.toFinset)) :=
+  fun j => (List.ofFn (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) operand j)).foldl
+    computation.op initValue
+
 /-! ## Helpers of differentiation rules -/
 
 /-- The axes of rank `n` that are listed in `dimensions`. -/
@@ -230,6 +284,13 @@ def expandDims {k : ℕ} {s : Shape k} (dimensions : Finset ℕ)
     Tensor (Index (expandDimsShape s (dimsSet _ dimensions) (card_compl_dimsSet h))) :=
   broadcastInDim _ (keptAxes (dimsSet _ dimensions) ∘ Fin.cast (card_compl_dimsSet h).symm)
     (expandDimsShape_broadcastsTo _ _ _) ((keptAxes_injective _).comp (Fin.cast_injective _)) array
+
+open scoped Classical in
+/-- `_replace_zero`, which replaces the zeros of `x` by ones.
+The rank-0 constant broadcasts to the shape of `x`, so the result has the shape of `x`.
+`jax/_src/lax/lax.py:5431`: `_replace_zero = lambda x: select(eq(x, _const(x, 0)), _ones(x), x)` -/
+noncomputable def replaceZero (x : Tensor ι) : Tensor ι :=
+  fun i => if (x i).eq 0 then 1 else x i
 
 open scoped Classical in
 /-- One entry of `_balanced_cmp`: `1` if `a > b`, `1/2` if `a == b`, `0` otherwise. -/

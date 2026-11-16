@@ -156,6 +156,20 @@ theorem keptAxesIdx_eq_orderIsoOfFin_symm (axes : Finset (Fin n)) (p : Fin n) (h
   refine Subtype.ext ?_
   rw [Finset.coe_orderIsoOfFin_apply, ← keptAxes_eq_orderEmbOfFin, keptAxes_keptAxesIdx]
 
+/-- The index of shape `s` that holds `r` on the axes `ax` and `j` on the axes that remain when `D` is removed.
+The axes in `ax` are those in `D`. -/
+def Index.merge {s : Shape n} {D : Finset (Fin n)} (ax : List (Fin n)) (hax : ∀ d, d ∈ ax ↔ d ∈ D)
+    (r : Index (s ∘ ax.get)) (j : Index (s ∘ keptAxes D)) : Index s :=
+  fun d => if h : d ∈ ax then
+      Fin.cast (by simp [List.getElem_idxOf]) (r ⟨ax.idxOf d, List.idxOf_lt_length_of_mem h⟩)
+    else Fin.cast (by simp [keptAxes_keptAxesIdx]) (j (keptAxesIdx D d ((hax d).not.1 h)))
+
+theorem Index.merge_val_of_mem {s : Shape n} {D : Finset (Fin n)} (ax : List (Fin n))
+    (hax : ∀ d, d ∈ ax ↔ d ∈ D) (r : Index (s ∘ ax.get)) (j : Index (s ∘ keptAxes D)) {d : Fin n}
+    (h : d ∈ ax) :
+    (Index.merge ax hax r j d : ℕ) = r ⟨ax.idxOf d, List.idxOf_lt_length_of_mem h⟩ := by
+  simp [Index.merge, h]
+
 theorem keptAxes_surj {axes : Finset (Fin n)} {p : Fin n} (hp : p ∉ axes) :
     ∃ a, keptAxes axes a = p :=
   ⟨_, keptAxes_keptAxesIdx axes p hp⟩
@@ -272,6 +286,19 @@ theorem Index.unbroadcast_eq_of_val {s t : Shape n} (h : BroadcastsTo s t) (j : 
 theorem Index.unbroadcast_refl {s : Shape n} (j : Index s) :
     j.unbroadcast (BroadcastsTo.refl s) = j :=
   Index.unbroadcast_eq_of_val _ j j fun _ => rfl
+
+theorem BroadcastsTo.trans {s t u : Shape n} (h : BroadcastsTo s t) (h' : BroadcastsTo t u) :
+    BroadcastsTo s u :=
+  fun d => by have := h d; have := h' d; omega
+
+/-- Unbroadcasting twice is unbroadcasting once. -/
+theorem Index.unbroadcast_unbroadcast {s t u : Shape n} (h : BroadcastsTo s t)
+    (h' : BroadcastsTo t u) (j : Index u) :
+    (j.unbroadcast h').unbroadcast h = j.unbroadcast (h.trans h') := by
+  refine Index.ext_val fun d => ?_
+  simp only [Index.unbroadcast_val]
+  have := h d
+  split_ifs <;> omega
 
 theorem Index.unbroadcast_congr {s t t' : Shape n} (h : BroadcastsTo s t) (h' : BroadcastsTo s t')
     (j : Index t) (j' : Index t') (hjj : ∀ d, (j d : ℕ) = j' d) :

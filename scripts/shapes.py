@@ -56,7 +56,7 @@ def generate_cases():
     for prim in ("sin", "cos", "log"):
         cases += [(prim, {"s": s}) for s in all_shapes()]
     cases += [("integer_pow", {"s": s, "y": y}) for s in all_shapes() for y in range(-4, 6)]
-    for prim in ("mul", "div", "max"):
+    for prim in ("mul", "div", "max", "pow"):
         cases += [(prim, {"sx": a, "sy": b})
                   for r in range(4) for a in shapes(r) for b in shapes(r)]
     # Polynomial: degrees 0 to 3, all shapes of rank at most 1,
@@ -75,6 +75,14 @@ def generate_cases():
         for k in range(len(s) + 1):
             for axes in itertools.permutations(range(len(s)), k):
                 cases.append(("reduce_sum", {"s": s, "axes": list(axes)}))
+    # reduce: every subset of axes in every order, and some dimensions with repetitions.
+    for s in all_shapes():
+        for k in range(len(s) + 1):
+            for axes in itertools.permutations(range(len(s)), k):
+                cases.append(("reduce", {"s": s, "dims": list(axes)}))
+        if s:
+            cases.append(("reduce", {"s": s, "dims": [0, 0]}))
+            cases.append(("reduce", {"s": s, "dims": [len(s) - 1, 0, len(s) - 1]}))
     # broadcast_in_dim: every map `broadcast_dimensions` of rank at most 3,
     # all operand and result shapes up to rank 2, and a sample at rank 3.
     for n in range(4):
@@ -169,7 +177,7 @@ def jax_record(case):
         unary(getattr(lax, prim), getattr(L, f"{prim}_p"), p["s"])
     elif prim == "integer_pow":
         unary(lax.integer_pow, L.integer_pow_p, p["s"], y=p["y"])
-    elif prim in ("mul", "div", "max"):
+    elif prim in ("mul", "div", "max", "pow"):
         f, primitive = getattr(lax, prim), getattr(L, f"{prim}_p")
         sx, sy = p["sx"], p["sy"]
         rec["primal"] = trace(f, sx, sy)
@@ -177,8 +185,14 @@ def jax_record(case):
             out = rec["primal"]["shape"]
             params = params_of(f, primitive, sx, sy)
             left, right = ad.primitive_jvps[primitive].args[0]
-            rec["jvp_left"] = trace(lambda g, x, y: left(g, x, y, **params), sx, sx, sy)
-            rec["jvp_right"] = trace(lambda g, x, y: right(g, x, y, **params), sy, sx, sy)
+            if prim == "pow":
+                # `ad.defjvp2` passes the primal result `ans` after the tangent.
+                rec["jvp_left"] = trace(lambda g, x, y: left(g, f(x, y), x, y, **params), sx, sx, sy)
+                rec["jvp_right"] = trace(lambda g, x, y: right(g, f(x, y), x, y, **params),
+                                         sy, sx, sy)
+            else:
+                rec["jvp_left"] = trace(lambda g, x, y: left(g, x, y, **params), sx, sx, sy)
+                rec["jvp_right"] = trace(lambda g, x, y: right(g, x, y, **params), sy, sx, sy)
             if prim == "mul":
                 tr = ad.primitive_transposes[primitive]
                 rec["transpose_left"] = trace(
@@ -228,6 +242,21 @@ def jax_record(case):
             tr = ad.primitive_transposes[primitive]
             rec["jvp"] = trace(lambda g, x: jvp((x,), (g,), **params)[1], s, s)
             rec["transpose"] = trace(lambda ct: tr(ct, undefined(s), **params)[0], out)
+            rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
+            rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
+    elif prim == "reduce":
+        s = p["s"]
+        # A non-commutative monoid, so that `lax.reduce` binds `reduce_p`.
+        op = lambda x, y: lax.select(y == 1.0, x, y)  # noqa: E731
+        f = lambda x: lax.reduce(x, 1.0, op, p["dims"])  # noqa: E731
+        rec["primal"] = trace(f, s)
+        if "error" not in rec["primal"]:
+            out = rec["primal"]["shape"]
+            params = params_of(f, L.reduce_p, s)
+            jvp = ad.primitive_jvps[L.reduce_p]
+            init_dot = ad.Zero(core.ShapedArray((), jnp.float32))
+            rec["jvp"] = trace(
+                lambda g, x: jvp((x, jnp.float32(1.0)), (g, init_dot), **params)[1][0], s, s)
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
     elif prim == "expand_dims":
@@ -291,14 +320,16 @@ def lean_spec(prim, p):
         primal = f"integerPow {y} (0 : Tensor (Index {S}))"
         jvp = f"integerPowJvp (s := {S}) {y} 0 0"
         return [], {"primal": primal, "jvp": jvp}, [("jvp", "primal")]
-    if prim in ("mul", "div", "max"):
+    if prim in ("mul", "div", "max", "pow"):
         SX, SY = lshape(p["sx"]), lshape(p["sy"])
         imp = f"(sx := {SX}) (sy := {SY}) PROOF0"
-        name = {"mul": "mul", "div": "div", "max": "max"}[prim]
+        name = prim
         primal = f"Lax.{name} {imp} 0 0"
+        # The rules of `ad.defjvp2` also take the primal result.
+        rule_args = "0 0 0 0" if prim == "pow" else "0 0 0"
         terms = {"primal": primal,
-                 "jvp_left": f"{name}JvpLeft {imp} 0 0 0",
-                 "jvp_right": f"{name}JvpRight {imp} 0 0 0"}
+                 "jvp_left": f"{name}JvpLeft {imp} {rule_args}",
+                 "jvp_right": f"{name}JvpRight {imp} {rule_args}"}
         vjp = [("jvp_left", "primal"), ("jvp_right", "primal")]
         if prim == "mul":
             terms["transpose_left"] = f"mulTransposeLeft {imp} 0 0"
@@ -325,6 +356,12 @@ def lean_spec(prim, p):
                  "jvp": f"reduceSumJvp (s := {S}) {A} 0 0",
                  "transpose": f"reduceSumTranspose (s := {S}) {A} 0"}
         return [], terms, [("jvp", "primal"), ("transpose", p["s"])]
+    if prim == "reduce":
+        n = len(p["s"])
+        S, D = lshape(p["s"]), f"([{', '.join(map(str, p['dims']))}] : List (Fin {n}))"
+        primal = f"Lax.reduce (s := {S}) lastNotOne 1 {D} PROOF0 0"
+        terms = {"primal": primal, "jvp": f"reduceJvp (s := {S}) lastNotOne 1 {D} PROOF0 0 0"}
+        return [(f"List.Nodup {D}", ())], terms, [("jvp", "primal")]
     if prim == "broadcast_in_dim":
         m, n = len(p["so"]), len(p["shape"])
         SO, SH = lshape(p["so"]), lshape(p["shape"])
@@ -380,6 +417,14 @@ EXPECTED = {
         and math.prod(p["s"]) != math.prod(p["new"]),
         lambda p: lshape(p["new"]),
     ),
+    "reduce-unique": (
+        "`_reduce_shape_rule` does not check that `dimensions` has no repetitions; "
+        "it is constraint (C5) of StableHLO `reduce`, a proof argument in the model",
+        lambda prim, p, rec: prim == "reduce" and "error" not in rec["primal"]
+        and len(set(p["dims"])) != len(p["dims"]),
+        lambda p: f"({lshape(p['s'])} ∘ keptAxes "
+                  f"([{', '.join(map(str, p['dims']))}] : List (Fin {len(p['s'])})).toFinset)",
+    ),
     "unbroadcast-checks": (
         "the assertion of `_unbroadcast` only runs under `jax_enable_checks`, "
         "a proof argument in the model",
@@ -392,8 +437,9 @@ EXPECTED = {
 
 # The inputs that `jax.vjp` differentiates, whose shapes the cotangents must have.
 VJP_INPUTS = {"sin": ["s"], "cos": ["s"], "log": ["s"], "integer_pow": ["s"],
-              "mul": ["sx", "sy"], "div": ["sx", "sy"], "max": ["sx", "sy"],
-              "polynomial": ["sx"], "reduce_sum": ["s"], "broadcast_in_dim": ["so"]}
+              "mul": ["sx", "sy"], "div": ["sx", "sy"], "max": ["sx", "sy"], "pow": ["sx", "sy"],
+              "polynomial": ["sx"], "reduce_sum": ["s"], "reduce": ["s"],
+              "broadcast_in_dim": ["so"]}
 
 
 def assertions(prim, p, rec):

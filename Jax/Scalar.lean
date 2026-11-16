@@ -1,6 +1,7 @@
 module
 
 public import Mathlib.Analysis.SpecialFunctions.Log.Basic
+public import Mathlib.Analysis.SpecialFunctions.Pow.Real
 public import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
 public import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
@@ -87,6 +88,27 @@ protected def log : Scalar → Scalar
   | posInf => posInf
   | _ => nan
 
+open scoped Classical in
+/-- Power, as `pow` of IEEE 754.
+`x ^ 0 = 1` and `1 ^ y = 1` for every `x` and `y`, even NaN.
+For finite `x` and `y`, `x ^ y` is the real power if `x > 0` or `y` is an integer,
+`0 ^ y` is `0` for `y > 0` and `+∞` for `y < 0`,
+and `x ^ y` is NaN for `x < 0` and a non-integer `y`.
+`(-∞) ^ y` is `-∞` for a positive odd integer `y`, and `(-1) ^ ±∞ = 1`. -/
+protected def pow (x y : Scalar) : Scalar :=
+  if y = 0 ∨ x = 1 then 1 else
+  match x, y with
+  | fin a, fin b =>
+    if a = 0 then (if 0 < b then 0 else posInf)
+    else if 0 < a ∨ ∃ k : ℤ, b = k then fin (a ^ b) else nan
+  | fin a, posInf => if |a| < 1 then 0 else if a = -1 then 1 else posInf
+  | fin a, negInf => if |a| < 1 then posInf else if a = -1 then 1 else 0
+  | posInf, fin b => if b < 0 then 0 else posInf
+  | negInf, fin b => if b < 0 then 0 else if ∃ k : ℤ, b = 2 * k + 1 then negInf else posInf
+  | posInf, posInf | negInf, posInf => posInf
+  | posInf, negInf | negInf, negInf => 0
+  | _, _ => nan
+
 /-- Maximum. NaN if either argument is NaN. -/
 protected def max : Scalar → Scalar → Scalar
   | fin x, fin y => fin (x ⊔ y)
@@ -124,6 +146,29 @@ theorem fin_div_fin (x : ℝ) {y : ℝ} (hy : y ≠ 0) : fin x / fin y = fin (x 
 theorem log_fin {x : ℝ} (hx : 0 < x) : (fin x).log = fin (Real.log x) := by
   show (if 0 < x then fin (Real.log x) else _) = _
   simp [hx]
+
+/-- The power of finite values is the real power if `x > 0`,
+or if `y` is an integer and not both `x = 0` and `y < 0`. -/
+theorem pow_fin {x y : ℝ} (h : 0 < x ∨ (∃ k : ℤ, y = k) ∧ (x ≠ 0 ∨ 0 ≤ y)) :
+    (fin x).pow (fin y) = fin (x ^ y) := by
+  unfold Scalar.pow
+  by_cases hy : y = 0
+  · subst hy
+    simp [zero_def, one_def, Real.rpow_zero]
+  by_cases hx1 : x = 1
+  · subst hx1
+    simp [one_def, Real.one_rpow]
+  have hc : ¬ (fin y = 0 ∨ fin x = 1) := by simp [zero_def, one_def, hy, hx1]
+  simp only [hc, ↓reduceIte]
+  by_cases hx : x = 0
+  · subst hx
+    have : 0 < y := by
+      rcases h with h | ⟨_, h | h⟩
+      · exact absurd h (lt_irrefl 0)
+      · exact absurd rfl h
+      · exact lt_of_le_of_ne h (Ne.symm hy)
+    simp [this, Real.zero_rpow hy, zero_def]
+  · simp [hx, h.imp_right (·.1)]
 
 /-- Addition is associative and commutative because finite values do not round. -/
 instance : AddCommMonoid Scalar where

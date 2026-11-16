@@ -9,7 +9,9 @@ public import Jax.Lax.Log
 public import Jax.Lax.Max
 public import Jax.Lax.Mul
 public import Jax.Lax.Polynomial
+public import Jax.Lax.Pow
 public import Jax.Lax.Primal
+public import Jax.Lax.Reduce
 public import Jax.Lax.ReduceSum
 public import Jax.Lax.Sin
 public import Jax.Scalar
