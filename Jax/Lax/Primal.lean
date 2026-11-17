@@ -389,6 +389,26 @@ def reduceSum {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (Index s))
     Tensor (Index (s ∘ keptAxes axes)) :=
   fun j => ∑ i with i.proj (keptAxes axes) = j, operand i
 
+/-- `lax.reduce_max`, the maximum over `axes`. The result keeps the other axes in order.
+`jax/_src/lax/lax.py:3466`; `out_sharding` is dropped.
+It lowers to [StableHLO `reduce`](https://openxla.org/stablehlo/spec#reduce) with `maximum`
+and the initial value `_get_max_identity`, which is `-∞` for floating-point dtypes.
+`jax/_src/lax/lax.py:9503`:
+```
+mlir.register_lowering(reduce_max_p, partial(_unary_reduce_lower, mlir.max_hlo,
+                                             _get_max_identity))
+```
+So the maximum over an empty axis is `-∞`, and over an axis with a NaN it is NaN.
+`maximum` is associative and commutative (`Scalar.max`), so the order of the reduction does not matter.
+Duplicate and out-of-bounds axes, which `_reduce_op_shape_rule` rejects, are not representable. -/
+def reduceMax {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (Index s)) :
+    Tensor (Index (s ∘ keptAxes axes)) :=
+  fun j => ({i | i.proj (keptAxes axes) = j} : Finset (Index s)).fold Scalar.max .negInf operand
+
+/-- `lax.convert_element_type` from `bool` to a floating-point dtype: `1` for true and `0` for false.
+`jax/_src/lax/lax.py:1713`. It lowers to [StableHLO `convert`](https://openxla.org/stablehlo/spec#convert). -/
+def convertBool {ι : Type} (x : ι → Bool) : Tensor ι := fun i => if x i then 1 else 0
+
 /-- `lax.cumsum`, the cumulative sum along `axis`:
 entry `j` is the sum of the entries at or before `j` on `axis`, and at or after `j` if `reverse`.
 `jax/_src/lax/control_flow/loops.py:3161`.

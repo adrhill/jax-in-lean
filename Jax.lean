@@ -1,6 +1,7 @@
 module
 
 public import Jax.Core
+public import Jax.Jaxpr.MaxInitial
 public import Jax.Jaxpr.SelectNan
 public import Jax.Jaxpr.SqrtRelu
 public import Jax.Lax.BroadcastInDim
@@ -21,6 +22,7 @@ public import Jax.Lax.Polynomial
 public import Jax.Lax.Pow
 public import Jax.Lax.Primal
 public import Jax.Lax.Reduce
+public import Jax.Lax.ReduceMax
 public import Jax.Lax.ReduceSum
 public import Jax.Lax.Rem
 public import Jax.Lax.ScatterAdd

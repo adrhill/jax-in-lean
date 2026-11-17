@@ -268,6 +268,17 @@ instance : AddCommMonoid Scalar where
     rintro (a | _ | _ | _) (b | _ | _ | _) <;> first | rfl | exact congrArg fin (add_comm a b)
   nsmul := nsmulRec
 
+/-- Maximum is commutative, also with NaN and the infinities. -/
+instance : Std.Commutative Scalar.max where
+  comm := by
+    rintro (a | _ | _ | _) (b | _ | _ | _) <;> first | rfl | exact congrArg fin (sup_comm a b)
+
+/-- Maximum is associative, also with NaN and the infinities. -/
+instance : Std.Associative Scalar.max where
+  assoc := by
+    rintro (a | _ | _ | _) (b | _ | _ | _) (c | _ | _ | _) <;>
+      first | rfl | exact congrArg fin (sup_assoc a b c)
+
 /-- The sum of finite values is finite. -/
 theorem fin_sum {ι : Type} (S : Finset ι) (f : ι → ℝ) : fin (∑ i ∈ S, f i) = ∑ i ∈ S, fin (f i) :=
   map_sum (⟨⟨fin, rfl⟩, fun _ _ => rfl⟩ : ℝ →+ Scalar) f S

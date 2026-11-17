@@ -104,6 +104,11 @@ def generate_cases():
         for k in range(len(s) + 1):
             for axes in itertools.permutations(range(len(s)), k):
                 cases.append(("reduce_sum", {"s": s, "axes": list(axes)}))
+    # reduce_max: every subset of axes, and every order of it.
+    for s in all_shapes():
+        for k in range(len(s) + 1):
+            for axes in itertools.permutations(range(len(s)), k):
+                cases.append(("reduce_max", {"s": s, "axes": list(axes)}))
     # reduce: every subset of axes in every order, and some dimensions with repetitions.
     for s in all_shapes():
         for k in range(len(s) + 1):
@@ -553,6 +558,17 @@ def jax_record(case):
             rec["transpose"] = trace(lambda ct: tr(ct, undefined(s), **params)[0], out)
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
+    elif prim == "reduce_max":
+        s = p["s"]
+        f = lambda x: lax.reduce_max(x, p["axes"])
+        rec["primal"] = trace(f, s)
+        if "error" not in rec["primal"]:
+            out = rec["primal"]["shape"]
+            params = params_of(f, L.reduce_max_p, s)
+            jvp = ad.primitive_jvps[L.reduce_max_p]
+            rec["jvp"] = trace(lambda g, x: jvp((x,), (g,), **params)[1], s, s)
+            rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
+            rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
     elif prim == "reduce":
         s = p["s"]
         # A non-commutative monoid, so that `lax.reduce` binds `reduce_p`.
@@ -981,6 +997,13 @@ def lean_spec(prim, p):
             "transpose": f"cumsumTranspose {imp} 0",
         }
         return [], terms, [("jvp", "primal"), ("transpose", p["s"])]
+    if prim == "reduce_max":
+        S, A = lshape(p["s"]), lfinset(p["axes"], f"(Fin {len(p['s'])})")
+        terms = {
+            "primal": f"reduceMax (s := {S}) {A} 0",
+            "jvp": f"reduceMaxJvp (s := {S}) {A} 0 (reduceMax (s := {S}) {A} 0) 0",
+        }
+        return [], terms, [("jvp", "primal")]
     if prim == "reduce":
         n = len(p["s"])
         S, D = lshape(p["s"]), f"([{', '.join(map(str, p['dims']))}] : List (Fin {n}))"
@@ -1316,6 +1339,7 @@ VJP_INPUTS = {
     "polynomial": ["sx"],
     "reduce_sum": ["s"],
     "reduce": ["s"],
+    "reduce_max": ["s"],
     "broadcast_in_dim": ["so"],
     "pad": ["s", "sv"],
     "cumsum": ["s"],
