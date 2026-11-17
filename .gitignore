@@ -17,3 +17,7 @@ gen/
 
 # Built bug dashboard
 _site/
+
+# Local notes
+ANALYSIS.md
+TODO.md

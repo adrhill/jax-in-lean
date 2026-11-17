@@ -67,6 +67,13 @@ noncomputable def transpose (operand : Arr) (permutation : List ℕ) : Option Ar
 def broadcast (operand : Arr) (sizes : List ℕ) : Option Arr :=
   broadcastInDim operand (sizes ++ operand.shapeList) (List.range' sizes.length operand.rank)
 
+/-- `lax.cumsum(operand, axis, reverse)`.
+`_cumred_shape_rule`, `jax/_src/lax/control_flow/loops.py:3181`, checks that `axis` is an axis of the operand.
+Negative axes, which it rejects, are not representable. -/
+def cumsum (operand : Arr) (axis : ℕ) (reverse : Bool) : Option Arr :=
+  if h : axis < operand.rank then some ⟨operand.shape, Lax.cumsum ⟨axis, h⟩ reverse operand.val⟩
+  else none
+
 /-! ## Helpers of batching rules -/
 
 /-- `moveaxis(x, src, dst)` for one axis. Negative axes are not modelled.

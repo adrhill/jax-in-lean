@@ -11,6 +11,7 @@ public import Jax.Lax.Cumsum
 public import Jax.Lax.Div
 public import Jax.Lax.Dynamic
 public import Jax.Lax.Exp
+public import Jax.Lax.Gather
 public import Jax.Lax.IntegerPow
 public import Jax.Lax.Log
 public import Jax.Lax.Max
@@ -22,6 +23,8 @@ public import Jax.Lax.Primal
 public import Jax.Lax.Reduce
 public import Jax.Lax.ReduceSum
 public import Jax.Lax.Rem
+public import Jax.Lax.ScatterAdd
+public import Jax.Lax.ScatterSub
 public import Jax.Lax.SelectN
 public import Jax.Lax.Sin
 public import Jax.Lax.Slice

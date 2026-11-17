@@ -14,6 +14,9 @@ A transpose rule with several linear inputs is also called for every choice of l
 and a batching rule for every choice of batched arguments and batch axes:
 the example states whether the model's rule raises, and what it returns.
 
+`gather` and `scatter_add` are also evaluated on concrete indices:
+the example states which position of the operand belongs to every position of the result or of the updates.
+
 A case passes if Lean accepts its example.
 An expected disagreement is listed in `EXPECTED`: for those cases the example states the model's
 side of the disagreement instead, so Lean still checks that the disagreement is exactly the expected one.
@@ -204,9 +207,115 @@ def generate_cases():
                         ]
                         batch_cases.append(("clamp_batch", {"shapes": ins, "bdims": list(bdims)}))
     cases += rng.sample(batch_cases, 1500)
+    # Batching rule of cumsum: operands up to rank 3, every batch axis, and every axis
+    # including the first one that is out of bounds. Batches of size 2 and 4.
+    for s in all_shapes(3, (1, 2, 3)):
+        for bdim in range(len(s) + 1):
+            for axis in range(len(s) + 1):
+                for size, rev in ((2, False), (4, True)):
+                    cases.append(
+                        (
+                            "cumsum_batch",
+                            {
+                                "shape": [*s[:bdim], size, *s[bdim:]],
+                                "bdim": bdim,
+                                "axis": axis,
+                                "reverse": rev,
+                            },
+                        )
+                    )
+    # gather and scatter_add: random valid configurations, and the same with one argument changed.
+    for _ in range(700):
+        g = random_gather(rng)
+        cases.append(("gather", mutate(rng, g) if rng.random() < 0.5 else g))
+    for _ in range(700):
+        g = random_gather(rng)
+        sc = {
+            "so": g["so"],
+            "si": g["si"],
+            "su": gather_shape(g),
+            "dn": g["dn"],
+            "mode": g["mode"],
+            "idx": g["idx"],
+        }
+        cases.append(("scatter_add", mutate(rng, sc) if rng.random() < 0.5 else sc))
+    for _ in range(300):
+        g = random_gather(rng)
+        sc = {
+            "so": g["so"],
+            "si": g["si"],
+            "su": gather_shape(g),
+            "dn": g["dn"],
+            "mode": g["mode"],
+            "idx": g["idx"],
+        }
+        cases.append(("scatter_sub", mutate(rng, sc) if rng.random() < 0.5 else sc))
     # Drop repeated cases, keeping the order.
     unique = {json.dumps(c, sort_keys=True): c for c in cases}
     return list(unique.values())
+
+
+MODES = ("clip", "fill", "promise_in_bounds")
+
+
+def random_gather(rng):
+    """A gather that `_gather_shape_rule` accepts, mostly with a nonempty operand.
+
+    `dn` lists `offset_dims`, `collapsed_slice_dims`, `start_index_map`, `operand_batching_dims`
+    and `start_indices_batching_dims`, and `idx` the indices in row-major order.
+    """
+    sizes = (0, 1, 2, 2, 3, 3)
+    n = rng.randint(0, 3)
+    so = [rng.choice(sizes) for _ in range(n)]
+    batch = [rng.choice(sizes) for _ in range(rng.randint(0, 2))]
+    nbatching = rng.choice((0, 0, 1, 2))
+    nbatching = min(nbatching, n, len(batch))
+    obd = sorted(rng.sample(range(n), nbatching))
+    sibd = rng.sample(range(len(batch)), nbatching)
+    for d, a in zip(obd, sibd):
+        so[d] = batch[a]
+    rest = [d for d in range(n) if d not in obd]
+    sim = rng.sample(rest, rng.randint(0, len(rest)))
+    # Mostly the collapsed axes are indexed, as in `jnp` indexing.
+    collapsed = sorted(d for d in rest if rng.random() < (0.6 if d in sim else 0.15))
+    ss = [1 if d in collapsed or d in obd else rng.randint(0, so[d]) for d in range(n)]
+    noff = len(rest) - len(collapsed)
+    offset = sorted(rng.sample(range(noff + len(batch)), noff))
+    si = [*batch, len(sim)]
+    idx = [rng.randint(-2, 4) for _ in range(math.prod(si))]
+    return {
+        "so": so,
+        "si": si,
+        "dn": [offset, collapsed, sim, obd, sibd],
+        "ss": ss,
+        "mode": rng.choice(MODES),
+        "idx": idx,
+    }
+
+
+def gather_shape(g):
+    """The shape of the result of a gather that `_gather_shape_rule` accepts."""
+    offset, collapsed, _, obd, _ = g["dn"]
+    window = iter(s for d, s in enumerate(g["ss"]) if d not in collapsed and d not in obd)
+    batch = iter(g["si"][:-1])
+    rank = len(offset) + len(g["si"]) - 1
+    return [next(window) if i in offset else next(batch) for i in range(rank)]
+
+
+def mutate(rng, case):
+    """Change one argument of a gather or scatter: a shape, a slice size or a dimension number."""
+    c = json.loads(json.dumps(case))
+    lists = [c[k] for k in ("so", "si", "su", "ss") if k in c] + c["dn"]
+    target = rng.choice(lists)
+    kind = rng.choice(("set", "set", "insert", "delete"))
+    if kind == "set" and target:
+        target[rng.randrange(len(target))] = rng.randint(0, 4)
+    elif kind == "delete" and target:
+        del target[rng.randrange(len(target))]
+    else:
+        target.insert(rng.randint(0, len(target)), rng.randint(0, 3))
+    c["idx"] = [rng.randint(-2, 4) for _ in range(math.prod(c["si"]))]
+    return c
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +419,11 @@ def jax_record(case):
                 rec["transpose_right"] = trace(
                     lambda ct, x: tr(ct, x, undefined(sy), **params)[1], out, sx
                 )
+            if prim == "div":
+                tr = ad.primitive_transposes[primitive]
+                rec["transpose"] = trace(
+                    lambda ct, y: tr(ct, undefined(sx), y, **params)[0], out, sy
+                )
             rec["user_jvp"] = trace(
                 lambda x, y, tx, ty: jax.jvp(op, (x, y), (tx, ty))[1], sx, sy, sx, sy
             )
@@ -389,11 +503,11 @@ def jax_record(case):
         rec["primal"] = trace(poly, sx, *sc)
         if "error" not in rec["primal"] and len(sc) >= 2:
             params = params_of(poly, L.polynomial_p, sx, *sc)
-            rule = ad.primitive_jvps[L.polynomial_p]
+            poly_jvp = ad.primitive_jvps[L.polynomial_p]
 
             def jvp(dx, x, *cs):
                 zeros = [ad.Zero(core.typeof(c).to_tangent_aval()) for c in cs]
-                return rule((x, *cs), (dx, *zeros), **params)[1]
+                return poly_jvp((x, *cs), (dx, *zeros), **params)[1]
 
             rec["jvp"] = trace(jvp, sx, sx, *sc)
             rec["user_jvp"] = trace(
@@ -505,12 +619,12 @@ def jax_record(case):
             out = rec["primal"]["shape"]
             params = params_of(f, slicing.slice_p, s)
             jvp = ad.primitive_jvps[slicing.slice_p]
-            rule = ad.fancy_transposes[slicing.slice_p]
+            tr = ad.fancy_transposes[slicing.slice_p]
 
             def transpose(ct):
                 # The rule adds the cotangent of the operand to an accumulator.
                 accum = ad.ValAccum(core.ShapedArray(tuple(s), jnp.float32))
-                rule(ct, accum, **params)
+                tr(ct, accum, **params)
                 return accum.freeze()
 
             rec["jvp"] = trace(lambda g, x: jvp((x,), (g,), **params)[1], s, s)
@@ -545,6 +659,169 @@ def jax_record(case):
             "user": user.get("shape"),
             "error": res.get("error"),
         }
+    elif prim == "cumsum_batch":
+        from jax._src.lax.control_flow import loops
+
+        rec["primal"] = {"shape": []}
+        out_bdim = []
+
+        def rule(x):
+            out, bdim = loops._cumred_batch_rule(
+                loops.cumsum_p, (x,), (p["bdim"],), axis=p["axis"], reverse=p["reverse"]
+            )
+            out_bdim.append(bdim)
+            return out
+
+        res = trace(rule, p["shape"])
+        user = trace(
+            jax.vmap(lambda x: lax.cumsum(x, p["axis"], p["reverse"]), in_axes=p["bdim"]),
+            p["shape"],
+        )
+        rec["batch"] = {
+            "result": None if "error" in res else [res["shape"], int(out_bdim[0])],
+            "user": user.get("shape"),
+            "error": res.get("error"),
+        }
+    elif prim == "gather":
+        import numpy as np
+        from jax._src.lax import slicing
+
+        so, si, ss, mode = p["so"], p["si"], tuple(p["ss"]), p["mode"]
+        gather_dnums = lax.GatherDimensionNumbers(*map(tuple, p["dn"]))
+        ints = jax.ShapeDtypeStruct(tuple(si), jnp.int32)
+        gath = lambda x, i: lax.gather(x, i, gather_dnums, ss, mode=mode)
+        rec["primal"] = trace(gath, so, ints)
+        if "error" not in rec["primal"]:
+            out = rec["primal"]["shape"]
+            params = params_of(gath, slicing.gather_p, so, ints)
+            rule, _ = jvp_rules(slicing.gather_p)
+            tr = ad.fancy_transposes[slicing.gather_p]
+
+            def transpose(ct, i):
+                # The rule adds the cotangent of the operand to an accumulator.
+                accum = ad.ValAccum(core.ShapedArray(tuple(so), jnp.float32))
+                tr(ct, accum, i, **params)
+                return accum.freeze()
+
+            rec["jvp"] = trace(lambda g, x, i: rule(g, x, i, **params), so, so, ints)
+            rec["transpose"] = trace(transpose, out, ints)
+            rec["user_jvp"] = trace(
+                lambda x, t, i: jax.jvp(lambda x: gath(x, i), (x,), (t,))[1], so, so, ints
+            )
+            rec["user_vjp"] = trace(
+                lambda x, ct, i: jax.vjp(lambda x: gath(x, i), x)[1](ct), so, out, ints
+            )
+            # The positions that the result reads: the operand counts its entries from 1.
+            size = math.prod(so)
+            if 0 < size and 0 < math.prod(out) <= 64:
+                x = jnp.arange(1, size + 1, dtype=jnp.float32).reshape(so)
+                i = jnp.array(p["idx"], jnp.int32).reshape(si)
+                try:
+                    got = np.asarray(lax.gather(x, i, gather_dnums, ss, mode=mode, fill_value=0))
+                except Exception as e:  # noqa: BLE001
+                    rec["lower"] = {"error": f"{type(e).__name__}: {str(e).splitlines()[0]}"}
+                else:
+                    js = list(np.ndindex(*out))
+                    rec["positions"] = {
+                        "js": [list(j) for j in js],
+                        "pos": [
+                            None
+                            if got[j] == 0
+                            else [int(k) for k in np.unravel_index(int(got[j]) - 1, so)]
+                            for j in js
+                        ],
+                    }
+    elif prim in SCATTER:
+        import numpy as np
+        from jax._src.lax import slicing
+
+        so, si, su, mode = p["so"], p["si"], p["su"], p["mode"]
+        dnums = lax.ScatterDimensionNumbers(*map(tuple, p["dn"]))
+        ints = jax.ShapeDtypeStruct(tuple(si), jnp.int32)
+        scatter_op = getattr(lax, prim)
+        scatter_p = getattr(slicing, prim + "_p")
+        f = lambda x, i, u: scatter_op(x, i, u, dnums, mode=mode)
+        rec["primal"] = trace(f, so, ints, su)
+        if "error" not in rec["primal"]:
+            params = params_of(f, scatter_p, so, ints, su)
+            jvp = ad.primitive_jvps[scatter_p]
+            tr = ad.primitive_transposes[scatter_p]
+            rec["jvp"] = trace(
+                lambda gx, gu, x, i, u: jvp((x, i, u), (gx, None, gu), **params)[1],
+                so,
+                su,
+                so,
+                ints,
+                su,
+            )
+            # The transpose rule for every choice of linear inputs: "1" marks a linear input.
+            # The result lists whether `operand` gets a cotangent, and the shape of the cotangent of `updates`.
+            partial_cts: dict[str, list | None] = {}
+            rec["partial"] = partial_cts
+            for lin in ("11", "10", "01"):
+
+                def partial_rule(ct, x, i, u, lin=lin):
+                    cts = tr(
+                        ct,
+                        undefined(so) if lin[0] == "1" else x,
+                        i,
+                        undefined(su) if lin[1] == "1" else u,
+                        **params,
+                    )
+                    partial_cts[lin] = [
+                        cts[0] is not None,
+                        None if cts[2] is None else list(cts[2].shape),
+                    ]
+                    return [c for c in cts if c is not None]
+
+                if "error" in trace(partial_rule, so, so, ints, su):
+                    partial_cts[lin] = None
+                elif lin[1] == "1" and math.prod(su) > 0 and math.prod(so) == 0:
+                    # The `gather` of the rule reads a nonempty result from an empty operand:
+                    # tracing may succeed where compiling fails.
+                    try:
+                        zeros = [jnp.zeros(s, jnp.float32) for s in (so, so, su)]
+                        i = jnp.array(p["idx"], jnp.int32).reshape(si)
+                        partial_rule(zeros[0], zeros[1], i, zeros[2])
+                    except Exception:  # noqa: BLE001
+                        partial_cts[lin] = None
+                        rec["compile_only"] = True
+            rec["user_jvp"] = trace(
+                lambda x, u, tx, tu, i: jax.jvp(lambda x, u: f(x, i, u), (x, u), (tx, tu))[1],
+                so,
+                su,
+                so,
+                su,
+                ints,
+            )
+            rec["user_vjp"] = trace(
+                lambda x, u, ct, i: jax.vjp(lambda x, u: f(x, i, u), x, u)[1](ct),
+                so,
+                su,
+                so,
+                ints,
+            )
+            # The position that every entry of the updates is added to:
+            # update `k` is `2 ** k`, so the result lists the updates of every position in binary.
+            # `bugs/scatter-empty-index-vector-elementwise.json`: XLA computes this case elementwise.
+            elementwise = not p["dn"][2] and su == so
+            size = math.prod(su)
+            if 0 < size <= 24 and math.prod(so) > 0 and not elementwise:
+                u = (2.0 ** jnp.arange(size, dtype=jnp.float32)).reshape(su)
+                i = jnp.array(p["idx"], jnp.int32).reshape(si)
+                try:
+                    got = np.asarray(
+                        abs(scatter_op(jnp.zeros(so, jnp.float32), i, u, dnums, mode=mode))
+                    )
+                except Exception as e:  # noqa: BLE001
+                    rec["lower"] = {"error": f"{type(e).__name__}: {str(e).splitlines()[0]}"}
+                else:
+                    pos: list[list[int] | None] = [None] * size
+                    for k in np.ndindex(*so):
+                        for b in range(size):
+                            if int(got[k]) >> b & 1:
+                                pos[b] = [int(d) for d in k]
+                    rec["positions"] = {"js": [list(j) for j in np.ndindex(*su)], "pos": pos}
     else:
         raise ValueError(prim)
     return rec
@@ -623,6 +900,9 @@ def lean_spec(prim, p):
             terms["transpose_left"] = f"mulTransposeLeft {imp} 0 0"
             terms["transpose_right"] = f"mulTransposeRight {imp} 0 0"
             vjp += [("transpose_left", p["sx"]), ("transpose_right", p["sy"])]
+        if prim == "div":
+            terms["transpose"] = f"divTranspose {imp} 0 0"
+            vjp += [("transpose", p["sx"])]
         return [(f"Broadcastable {SX} {SY}", ("Broadcastable",))], terms, vjp
     if prim in COMPARE:
         SX, SY = lshape(p["sx"]), lshape(p["sy"])
@@ -778,7 +1058,75 @@ def lean_spec(prim, p):
         SA, SX = lshape(p["sa"]), lshape(p["sx"])
         arg = f"BroadcastsTo {SA} {SX}"
         return [(arg, ("BroadcastsTo",))], {"primal": f"unbroadcast (sx := {SX}) {SA} PROOF0 0"}, []
+    if prim == "gather":
+        SO, SI, DN, SS = lshape(p["so"]), lshape(p["si"]), lgather(p["dn"]), llist(p["ss"])
+        imp = f"(so := {SO}) (si := {SI}) {DN} {SS} {LMODE[p['mode']]}"
+        zero = "(fun _ => 0)"
+        terms = {
+            "primal": f"gather {imp} 0 PROOF0 PROOF1 0 {zero}",
+            "jvp": f"gatherJvp {imp} PROOF0 PROOF1 0 0 {zero}",
+            "transpose": f"gatherTranspose {SO} (si := {SI}) {DN} {SS} {LMODE[p['mode']]} PROOF2 0 {zero}",
+        }
+        args = [
+            (f"GatherValid {SO} {SI} {DN} {SS}", ()),
+            (f"GatherLowers {SO} {SI} {DN} {SS}", ()),
+            (f"ScatterValid {SO} {SI} (gatherShape {SI} {DN} {SS}) ({DN}).toScatter", ()),
+        ]
+        return args, terms, [("jvp", "primal"), ("transpose", p["so"])]
+    if prim in SCATTER:
+        name = SCATTER[prim]
+        SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
+        imp = f"(so := {SO}) (si := {SI}) (su := {SU}) {DN} {LMODE[p['mode']]} PROOF0"
+        zero = "(fun _ => 0)"
+        terms = {
+            "primal": f"{name} {imp} 0 {zero} 0",
+            "jvp": f"{name}Jvp {imp} 0 0 0 {zero} 0",
+        }
+        return [(f"ScatterValid {SO} {SI} {SU} {DN}", ())], terms, [("jvp", "primal")]
     raise ValueError(prim)
+
+
+# The scatter primitives with the rules of `scatter_add`, and their names in the model.
+SCATTER = {"scatter_add": "scatterAdd", "scatter_sub": "scatterSub"}
+
+LMODE = {
+    "clip": "GatherScatterMode.clip",
+    "fill": "GatherScatterMode.fillOrDrop",
+    "promise_in_bounds": "GatherScatterMode.promiseInBounds",
+}
+
+
+def lgather(dn):
+    return f"(⟨{', '.join(map(llist, dn))}⟩ : GatherDimensionNumbers)"
+
+
+def lscatter(dn):
+    return f"(⟨{', '.join(map(llist, dn))}⟩ : ScatterDimensionNumbers)"
+
+
+def lints(s, vals):
+    return f"(ints {lshape(s)} [{', '.join(map(str, vals))}])"
+
+
+def gather_positions(p, js):
+    """The positions of the operand that the positions `js` of the result of a gather read."""
+    SO, SI, DN, SS = lshape(p["so"]), lshape(p["si"]), lgather(p["dn"]), llist(p["ss"])
+    clip = str(p["mode"] != "fill").lower()
+    return f"positions {js} (gatherIndex {SO} {SI} {DN} {SS} {clip} {lints(p['si'], p['idx'])})"
+
+
+def scatter_positions(p, js):
+    """The positions of the operand that the positions `js` of the updates of a scatter are added to."""
+    SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
+    clip = str(p["mode"] == "clip").lower()
+    return (
+        f"positions {js} (gatherIndex {SO} {SI} ({DN}).toGather "
+        f"(scatterSliceSizes {len(p['so'])} {SU} {DN}) {clip} {lints(p['si'], p['idx'])})"
+    )
+
+
+# Values: the Lean term that lists the position of the operand for every given position of the result.
+POSITIONS = {"gather": gather_positions, **dict.fromkeys(SCATTER, scatter_positions)}
 
 
 # Forwarding rules: the Lean term that is `true` if the rule replaces the equation by its operand.
@@ -806,7 +1154,29 @@ def pad_partial(p, lin):
 
 # Transpose rules for every choice of linear inputs: the Lean term that is `none` if the rule raises,
 # and otherwise lists which arguments get a cotangent.
-PARTIAL = {"pad": pad_partial}
+def scatter_partial(name, p, lin):
+    SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
+    x, u = ("none" if c == "1" else "(some 0)" for c in lin)
+    return (
+        f"({name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {DN} {LMODE[p['mode']]} 0 "
+        f"{x} (fun _ => 0) {u}).map (fun r => (r.1.isSome, r.2.map shapeOf))"
+    )
+
+
+PARTIAL = {
+    "pad": pad_partial,
+    **{prim: functools.partial(scatter_partial, name) for prim, name in SCATTER.items()},
+}
+
+
+def partial_want(prim, cts):
+    """The Lean value of the result of a transpose rule for one choice of linear inputs."""
+    if cts is None:
+        return "none"
+    if prim in SCATTER:
+        shape = "none" if cts[1] is None else f"some {llist(cts[1])}"
+        return f"some ({str(cts[0]).lower()}, {shape})"
+    return f"some [{', '.join(str(c).lower() for c in cts)}]"
 
 
 def larr(s):
@@ -822,6 +1192,10 @@ def lbatched(s, bdim):
 BATCH = {
     "clamp_batch": lambda p: (
         f"(clampBatch {' '.join(lbatched(s, d) for s, d in zip(p['shapes'], p['bdims']))})"
+        ".map (fun y => (y.val.shapeList, y.bdim))"
+    ),
+    "cumsum_batch": lambda p: (
+        f"(cumsumBatch {p['axis']} {str(p['reverse']).lower()} {lbatched(p['shape'], p['bdim'])})"
         ".map (fun y => (y.val.shapeList, y.bdim))"
     ),
 }
@@ -901,7 +1275,28 @@ EXPECTED = {
         ),
         lambda p: lshape(p["sa"]),
     ),
+    "gather-lowers": (
+        (
+            "`_gather_shape_rule` accepts slices larger than the operand for empty indices, "
+            "and slice size 0 on a batching axis; XLA rejects the first and returns zeros for the second "
+            "unless the result is empty, a proof argument in the model"
+        ),
+        lambda prim, p, rec: (
+            prim == "gather" and "error" not in rec["primal"] and not gather_lowers(p, rec)
+        ),
+        lambda p: f"(gatherShape {lshape(p['si'])} {lgather(p['dn'])} {llist(p['ss'])})",
+    ),
 }
+
+
+def gather_lowers(p, rec):
+    """Whether XLA computes a gather that `_gather_shape_rule` accepts as StableHLO defines it."""
+    if math.prod(rec["primal"]["shape"]) == 0:
+        return True
+    return all(a <= b for a, b in zip(p["ss"], p["so"])) and all(
+        p["ss"][d] == 1 for d in p["dn"][3]
+    )
+
 
 # The inputs that `jax.vjp` differentiates, whose shapes the cotangents must have.
 VJP_INPUTS = {
@@ -925,6 +1320,9 @@ VJP_INPUTS = {
     "pad": ["s", "sv"],
     "cumsum": ["s"],
     "slice": ["s"],
+    "gather": ["so"],
+    "scatter_add": ["so", "su"],
+    "scatter_sub": ["so", "su"],
 }
 
 
@@ -974,8 +1372,17 @@ def assertions(prim, p, rec):
         forwarded = "true" if rec["fwd"]["forwarded"] else "false"
         out.append(("fwd", f"{FWD[prim](p)} = {forwarded}", "decide"))
     for lin, cts in rec.get("partial", {}).items():
-        want = "none" if cts is None else f"some [{', '.join(str(c).lower() for c in cts)}]"
+        want = partial_want(prim, cts)
         out.append((f"partial {lin}", f"{fill(PARTIAL[prim](p, lin), args)} = {want}", "decide"))
+    if "lower" in rec and not (prim in SCATTER and not p["so"] and math.prod(p["su"]) > 1):
+        # Only `bugs/scatter-scalar-operand-compile.json` is known to fail when it is compiled.
+        out.append(("compiles", "False", "decide"))
+    if "positions" in rec:
+        js = "[" + ", ".join(llist(j) for j in rec["positions"]["js"]) + "]"
+        pos = ", ".join(
+            "none" if k is None else f"some {llist(k)}" for k in rec["positions"]["pos"]
+        )
+        out.append(("positions", f"{POSITIONS[prim](p, js)} = [{pos}]", "decide"))
     if "user_jvp" in rec:
         # A comparison has no rule term: its zero tangent has the shape of the primal output.
         jvps = [n for n in terms if n.startswith("jvp")] or ["primal"]
@@ -986,7 +1393,15 @@ def assertions(prim, p, rec):
                 out.append(
                     (f"user_jvp = {n}", f"{llist(rec['user_jvp']['shape'])} = {ref(n)}", "decide")
                 )
-    if "user_vjp" in rec and vjp:
+    # A rule that reverse mode calls raises: this is asserted above, and reverse mode raises too.
+    rule_raises = any("error" in rec.get(t, {}) for t, _ in vjp) or (
+        "partial" in rec and rec["partial"].get("1" * len(VJP_INPUTS[prim])) is None
+    )
+    if "user_vjp" in rec and vjp and rule_raises:
+        # Reverse mode is only traced here, so it does not see a rule that fails when it is compiled.
+        if "error" not in rec["user_vjp"] and "compile_only" not in rec:
+            out.append(("user_vjp", "False", "decide"))
+    elif "user_vjp" in rec and vjp:
         conj = " ∧ ".join(
             f"({ref(t)} = {ref(o) if isinstance(o, str) else llist(o)})" for t, o in vjp
         )
@@ -1018,6 +1433,15 @@ abbrev sh (l : List ℕ) : Shape l.length := fun d => l.get d
 
 /-- The map from the axes of an operand to the axes `l` of rank `n`. -/
 abbrev dims (n : ℕ) (l : List (Fin n)) : Fin l.length → Fin n := fun d => l.get d
+
+/-- The array of integers with the entries `vals` in row-major order. -/
+def ints {n : ℕ} (s : Shape n) (vals : List ℤ) : Index s → ℤ :=
+  fun i => vals.getD ((List.finRange n).foldl (fun acc d => acc * s d + i d) 0) 0
+
+/-- The position of the operand for each of the positions `js` of a result, or `none`. -/
+def positions {n : ℕ} {s : Shape n} (js : List (List ℕ)) (f : (ℕ → ℕ) → Option (Index s)) :
+    List (Option (List ℕ)) :=
+  js.map fun j => (f fun d => j.getD d 0).map fun i => List.ofFn fun d => (i d : ℕ)
 """
 
 

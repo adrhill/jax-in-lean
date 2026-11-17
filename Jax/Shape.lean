@@ -29,6 +29,12 @@ variable {m n : ℕ}
 /-- The index that keeps axis `e d` of `i` as its axis `d`. -/
 def Index.proj {s : Shape n} (e : Fin m → Fin n) (i : Index s) : Index (s ∘ e) := fun d => i (e d)
 
+/-- The size of axis `d` of `s`, and `0` if `s` has no axis `d`. -/
+def Shape.sizeD (s : Shape n) (d : ℕ) : ℕ := if h : d < n then s ⟨d, h⟩ else 0
+
+/-- The index `i` on axis `d`, and `0` if `i` has no axis `d`. -/
+def Index.val {s : Shape n} (i : Index s) (d : ℕ) : ℕ := if h : d < n then i ⟨d, h⟩ else 0
+
 /-- The shapes `s` and `t` have the same rank and the same sizes.
 Shapes are static, so this is `core.definitely_equal_shape`, `jax/_src/core.py:3205`:
 ```

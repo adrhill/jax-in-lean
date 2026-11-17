@@ -294,6 +294,15 @@ def Batched.get (x : Batched) (i : ℕ) : Option Arr :=
 def Batched.HasSize (x : Batched) (size : ℕ) : Prop :=
   ∀ d ∈ x.bdim, ∃ h : d < x.val.rank, x.val.shape ⟨d, h⟩ = size
 
+/-- `rule` is a correct batching rule for the unary `f`, as `IsBatchOf₃` for one argument:
+for every nonempty batch on whose entries `f` does not raise,
+the rule does not raise, and entry `i` of its result is `f` of entry `i` of the argument. -/
+def IsBatchOf₁ (rule : Batched → Option Batched) (f : Arr → Option Arr) : Prop :=
+  ∀ (size : ℕ) (a : Batched), 0 < size → a.HasSize size → a.bdim.isSome →
+    (∀ i < size, ∃ ai, a.get i = some ai ∧ (f ai).isSome) →
+    ∃ y, rule a = some y ∧ ∀ i < size, ∃ ai r yi, a.get i = some ai ∧ f ai = some r ∧
+      y.get i = some yi ∧ yi.Same r
+
 /-- `rule` is a correct batching rule for the ternary `f`.
 
 `vmap` maps `f` over a batch of `size` entries.
@@ -345,6 +354,13 @@ theorem sum_filter_index_congr {s t : Shape n} (hst : ∀ d, s d = t d) {P : Ind
   rw [Finset.sum_filter, Finset.sum_filter]
   exact Fintype.sum_equiv (Equiv.piCongrRight fun d => finCongr (hst d)) _ _ fun i =>
     if_congr (hPQ i _ fun _ => rfl) (hfg i _ fun _ => rfl) rfl
+
+/-- Entry `i` of an array along its axis `p`. -/
+theorem Arr.unbatch_mk (shape : Shape (n + 1)) (val : Tensor (Index shape)) (p : Fin (n + 1))
+    {i : ℕ} (hi : i < shape p) :
+    Arr.unbatch ⟨shape, val⟩ p i = some ⟨Fin.removeNth p shape,
+      fun j => val (Fin.insertNth (α := fun d => Fin (shape d)) p ⟨i, hi⟩ j)⟩ := by
+  simp [Arr.unbatch, hi, p.isLt]
 
 /-- A linear primitive is its own JVP rule.
 `ad.deflinear2` registers `linear_jvp`, `jax/_src/interpreters/ad.py:942`,

@@ -8,7 +8,10 @@ public import Mathlib.Analysis.Calculus.Deriv.Inv
 
 Differentiation rules of the `div` primitive of `jax/_src/lax/lax.py`.
 
-The transpose rule `_div_transpose_rule` is not modelled yet.
+`div` is linear in its first argument only.
+The transpose rule is correct where the divisor has no zeros, also for operands that are broadcast
+(`divTranspose_correct`).
+For a zero divisor, `x ↦ x / 0` does not map real arrays to real arrays (`div_zero_not_isTransposeOf`).
 -/
 
 @[expose] public section
@@ -95,5 +98,73 @@ theorem divJvp_correct (h : Broadcastable sx sy) :
       have := hy j
       field_simp
       ring
+
+/-! ## Transpose rule -/
+
+theorem divTranspose_broadcastsTo (h : Broadcastable sx sy) :
+    BroadcastsTo sx (broadcastShape (broadcastShape sx sy) sy) := fun d => by
+  have := h d
+  simp only [broadcastShape]
+  split_ifs <;> omega
+
+/-- The transpose rule of `div`, for its first argument.
+The undefined primal `x` is replaced by its shape `sx`, and `y` is not a linear input:
+the rule raises if `x` is not a linear input or `y` is one.
+`jax/_src/lax/lax.py:5600`:
+```
+def _div_transpose_rule(cotangent, x, y):
+  assert ad.is_undefined_primal(x)
+  if ad.is_undefined_primal(y):
+    raise RuntimeError("nonlinear div can't be transposed")
+  if type(cotangent) is ad_util.Zero:
+    return [ad_util.Zero(x.aval), None]
+  else:
+    return [_unbroadcast(x.aval, div(cotangent, y)), None]
+``` -/
+noncomputable def divTranspose (h : Broadcastable sx sy) (y : Tensor (Index sy))
+    (cotangent : Tensor (Index (broadcastShape sx sy))) : Tensor (Index sx) :=
+  unbroadcast sx (divTranspose_broadcastsTo h) (div h.right.broadcastable.symm cotangent y)
+
+/-- The transpose rule of `div` transposes `div` with a fixed divisor that has no zeros. -/
+theorem divTranspose_correct (h : Broadcastable sx sy) (y : Index sy → ℝ)
+    (hy : ∀ j : Index (broadcastShape sx sy), y (j.unbroadcast h.right) ≠ 0) :
+    IsTransposeOf (divTranspose h (ofReal y)) (div h · (ofReal y)) := by
+  intro ct x
+  let ux : Index (broadcastShape sx sy) → Index sx := fun j => j.unbroadcast (broadcastsTo_left sx sy)
+  let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right
+  refine ⟨fun j => x (ux j) / y (uy j), fun i => ∑ j with ux j = i, ct j / y (uy j),
+    funext fun j => Scalar.fin_div_fin _ (hy j), .of_eq (funext fun i => ?_), ?_⟩
+  · rw [divTranspose, unbroadcast_apply, ofReal, Scalar.fin_sum]
+    refine sum_filter_index_congr (fun d => ?_) _ _ (fun j j' hjj => ?_) fun j j' hjj => ?_
+    · have := h d
+      simp only [broadcastShape]
+      split_ifs <;> omega
+    · rw [Index.unbroadcast_congr _ (broadcastsTo_left sx sy) j j' hjj]
+    · simp only [div, binop, ofReal, uy]
+      rw [Index.unbroadcast_eq_of_val _ j j' hjj, Index.unbroadcast_congr _ h.right j j' hjj]
+      exact Scalar.fin_div_fin _ (hy j')
+  · calc ∑ j, ct j * (x (ux j) / y (uy j))
+        = ∑ i, ∑ j with ux j = i, ct j * (x (ux j) / y (uy j)) := (Finset.sum_fiberwise _ _ _).symm
+      _ = ∑ i, (∑ j with ux j = i, ct j / y (uy j)) * x i := by
+          refine Finset.sum_congr rfl fun i _ => ?_
+          rw [Finset.sum_mul]
+          refine Finset.sum_congr rfl fun j hj => ?_
+          rw [(Finset.mem_filter.1 hj).2]
+          ring
+
+/-- No transpose rule is correct for `x ↦ x / 0`: it does not map real arrays to real arrays,
+because `0 / 0` is NaN. -/
+theorem div_zero_not_isTransposeOf {s : Shape n} [Nonempty (Index s)]
+    (tr : Tensor (Index (broadcastShape s s)) → Tensor (Index s)) :
+    ¬ IsTransposeOf tr (div (.refl s) · (ofReal 0)) := by
+  intro htr
+  obtain ⟨y, -, hy, -⟩ := htr 0 0
+  obtain ⟨i⟩ := ‹Nonempty (Index s)›
+  have := congrFun hy fun d => ⟨i d, by simp [broadcastShape]⟩
+  have h0 : (Scalar.fin 0 / Scalar.fin 0 : Scalar) = .nan := by
+    show (if (0 : ℝ) = 0 then Scalar.infWithSign 0 else _) = _
+    simp [Scalar.infWithSign]
+  simp only [div, binop, ofReal, Pi.zero_apply, h0] at this
+  cases this
 
 end Jax.Lax

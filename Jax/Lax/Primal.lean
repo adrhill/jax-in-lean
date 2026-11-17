@@ -559,6 +559,351 @@ def reduce {s : Shape n} (computation : Computation) (initValue : Scalar) (dimen
   fun j => (List.ofFn (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) operand j)).foldl
     computation.op initValue
 
+/-! ## Gather and scatter
+
+An array of indices of shape `s` is a function `Index s → ℤ`, with no tangent.
+Dimension numbers are lists of natural numbers, as in JAX. Negative dimensions, which the shape rules reject,
+are not representable.
+`unique_indices` and `indices_are_sorted` are dropped: they are promises that let XLA pick a faster implementation,
+and the semantics are those without the promises.
+-/
+
+section GatherScatter
+
+variable {ni nu : ℕ}
+
+/-- `GatherScatterMode`, `jax/_src/lax/slicing.py:280`:
+what `gather` and `scatter` do with a window that does not lie inside the operand.
+
+* `clip`: both clamp the start of the window so that it does.
+* `fillOrDrop`: `gather` returns `fill_value` in the whole window, and `scatter` drops the whole window.
+* `promiseInBounds`: nothing is checked. With XLA, `gather` clamps and `scatter` drops:
+  "In practice, with the current XLA implementation this means that out-of-bounds gathers will be clamped
+  but out-of-bounds scatters will be discarded. Gradients will not be correct if indices are out-of-bounds."
+
+`ONE_HOT` is not modelled: `_gather_lower` raises for it. -/
+inductive GatherScatterMode where
+  | clip
+  | fillOrDrop
+  | promiseInBounds
+  deriving DecidableEq
+
+/-- `GatherDimensionNumbers`, `jax/_src/lax/slicing.py:241`.
+The index vector is the last axis of the indices. -/
+structure GatherDimensionNumbers where
+  offsetDims : List ℕ
+  collapsedSliceDims : List ℕ
+  startIndexMap : List ℕ
+  operandBatchingDims : List ℕ := []
+  startIndicesBatchingDims : List ℕ := []
+
+/-- `ScatterDimensionNumbers`, `jax/_src/lax/slicing.py:432`.
+The index vector is the last axis of the indices. -/
+structure ScatterDimensionNumbers where
+  updateWindowDims : List ℕ
+  insertedWindowDims : List ℕ
+  scatterDimsToOperandDims : List ℕ
+  operandBatchingDims : List ℕ := []
+  scatterIndicesBatchingDims : List ℕ := []
+
+/-- The dimension numbers of the gather that reads the windows that the scatter writes.
+The rules of `scatter` build them, as in `jax/_src/lax/slicing.py:2888`:
+```
+      gather_dnums = GatherDimensionNumbers(
+          offset_dims=dimension_numbers.update_window_dims,
+          collapsed_slice_dims=dimension_numbers.inserted_window_dims,
+          start_index_map=dimension_numbers.scatter_dims_to_operand_dims,
+          operand_batching_dims=dimension_numbers.operand_batching_dims,
+          start_indices_batching_dims=dimension_numbers.scatter_indices_batching_dims,
+      )
+``` -/
+def ScatterDimensionNumbers.toGather (dn : ScatterDimensionNumbers) : GatherDimensionNumbers :=
+  ⟨dn.updateWindowDims, dn.insertedWindowDims, dn.scatterDimsToOperandDims, dn.operandBatchingDims,
+    dn.scatterIndicesBatchingDims⟩
+
+/-- The dimension numbers of the scatter that writes the windows that the gather reads.
+`_gather_transpose_fancy` builds them, `jax/_src/lax/slicing.py:2246`:
+```
+  scatter_dnums = ScatterDimensionNumbers(
+      update_window_dims=dimension_numbers.offset_dims,
+      inserted_window_dims=dimension_numbers.collapsed_slice_dims,
+      scatter_dims_to_operand_dims=dimension_numbers.start_index_map,
+      operand_batching_dims=dimension_numbers.operand_batching_dims,
+      scatter_indices_batching_dims=dimension_numbers.start_indices_batching_dims,
+  )
+``` -/
+def GatherDimensionNumbers.toScatter (dn : GatherDimensionNumbers) : ScatterDimensionNumbers :=
+  ⟨dn.offsetDims, dn.collapsedSliceDims, dn.startIndexMap, dn.operandBatchingDims,
+    dn.startIndicesBatchingDims⟩
+
+/-- The batch axes of the result of a gather of rank `r`: the axes that are not in `offsetDims`, in order.
+Batch axis `a` of the result is axis `a` of the indices.
+These are also the scatter axes of the updates of a scatter. -/
+def batchDims (r : ℕ) (offsetDims : List ℕ) : List ℕ := (List.range r).filter (· ∉ offsetDims)
+
+/-- The window axes of an operand of rank `n`: the axes that are neither collapsed nor batching, in order.
+Window axis `q` of the operand is axis `offsetDims[q]` of the result. -/
+def windowDims (n : ℕ) (dn : GatherDimensionNumbers) : List ℕ :=
+  (List.range n).filter fun d => d ∉ dn.collapsedSliceDims ∧ d ∉ dn.operandBatchingDims
+
+/-- The shape of the result of `gather`: axis `offsetDims[q]` has the slice size of window axis `q` of the operand,
+and the other axes are those of the indices without the index vector, in order.
+`_gather_shape_computation`, `jax/_src/lax/slicing.py:1986`:
+```
+  output_shape_rank = len(offset_dims) + _rank(indices) - 1
+  ...
+  expanded_indices_shape.pop(index_vector_dim)
+
+  indices_shape_gen = iter(expanded_indices_shape)
+
+  slice_sizes_gen = (
+      s
+      for i, s in enumerate(slice_sizes)
+      if i not in collapsed_slice_dims and i not in operand_batching_dims
+  )
+  ans = tuple(next(slice_sizes_gen) if i in offset_dims
+              else next(indices_shape_gen) for i in range(output_shape_rank))
+``` -/
+def gatherShape (si : Shape ni) (dn : GatherDimensionNumbers) (sliceSizes : List ℕ) :
+    Shape (dn.offsetDims.length + (ni - 1)) :=
+  fun i => if (i : ℕ) ∈ dn.offsetDims then
+      sliceSizes.getD ((windowDims sliceSizes.length dn).getD (dn.offsetDims.idxOf (i : ℕ)) 0) 0
+    else si.sizeD ((batchDims (dn.offsetDims.length + (ni - 1)) dn.offsetDims).idxOf (i : ℕ))
+
+/-- The checks of `_gather_shape_rule`, `jax/_src/lax/slicing.py:1824`, in its order:
+
+* the indices have an index vector axis,
+* `offset_dims` is strictly increasing and lists axes of the result,
+* `start_index_map` has one entry per entry of the index vector, lists axes of the operand and does not repeat,
+* `collapsed_slice_dims` and `operand_batching_dims` are strictly increasing and list axes of the operand,
+* `operand_batching_dims` shares no axis with `collapsed_slice_dims` or `start_index_map`,
+* `start_indices_batching_dims` does not repeat and lists axes of the indices other than the index vector,
+* the batching axes of the operand and of the indices have the same sizes,
+* there is one slice size per axis of the operand,
+  and every axis of the operand is an offset, collapsed or batching axis,
+* no slice is larger than the operand, which is only checked if the indices are not empty:
+  `if not core.is_empty_shape(indices.shape) and not (slice_size >= 0 and corresponding_input_size >= slice_size)`,
+* collapsed axes have slice size 1, and batching axes at most 1. -/
+def GatherValid (so : Shape n) (si : Shape ni) (dn : GatherDimensionNumbers) (sliceSizes : List ℕ) :
+    Prop :=
+  0 < ni ∧
+  dn.offsetDims.Pairwise (· < ·) ∧
+  (∀ d ∈ dn.offsetDims, d < dn.offsetDims.length + (ni - 1)) ∧
+  dn.startIndexMap.length = si.sizeD (ni - 1) ∧
+  (∀ d ∈ dn.startIndexMap, d < n) ∧
+  dn.startIndexMap.Nodup ∧
+  dn.collapsedSliceDims.Pairwise (· < ·) ∧
+  (∀ d ∈ dn.collapsedSliceDims, d < n) ∧
+  dn.operandBatchingDims.Pairwise (· < ·) ∧
+  (∀ d ∈ dn.operandBatchingDims, d < n) ∧
+  (∀ d ∈ dn.collapsedSliceDims, d ∉ dn.operandBatchingDims) ∧
+  (∀ d ∈ dn.startIndexMap, d ∉ dn.operandBatchingDims) ∧
+  dn.startIndicesBatchingDims.Nodup ∧
+  (∀ d ∈ dn.startIndicesBatchingDims, d < ni - 1) ∧
+  dn.operandBatchingDims.map so.sizeD = dn.startIndicesBatchingDims.map si.sizeD ∧
+  sliceSizes.length = n ∧
+  n = dn.offsetDims.length + dn.collapsedSliceDims.length + dn.operandBatchingDims.length ∧
+  ((∀ d, si d ≠ 0) → ∀ d : Fin n, sliceSizes.getD d 0 ≤ so d) ∧
+  (∀ d ∈ dn.collapsedSliceDims, sliceSizes.getD d 0 = 1) ∧
+  (∀ d ∈ dn.operandBatchingDims, sliceSizes.getD d 0 ≤ 1)
+
+instance {so : Shape n} {si : Shape ni} {dn : GatherDimensionNumbers} {sliceSizes : List ℕ} :
+    Decidable (GatherValid so si dn sliceSizes) :=
+  inferInstanceAs (Decidable (_ ∧ _))
+
+/-- The constraints of XLA on a `gather` with a nonempty result that `_gather_shape_rule` does not check:
+
+* no slice is larger than the operand, constraint (C13) of
+  [StableHLO `gather`](https://openxla.org/stablehlo/spec#gather).
+  The shape rule skips this check for empty indices, and compiling such a gather fails,
+* batching axes have slice size 1. The shape rule and constraint (C12) also allow 0,
+  for which XLA returns zeros where the formula of StableHLO reads the operand.
+
+`_gather_lower`, `jax/_src/lax/slicing.py:2434`, returns zeros for an empty result and does not emit a gather. -/
+def GatherLowers (so : Shape n) (si : Shape ni) (dn : GatherDimensionNumbers) (sliceSizes : List ℕ) :
+    Prop :=
+  (∀ d, gatherShape si dn sliceSizes d ≠ 0) →
+    (∀ d : Fin n, sliceSizes.getD d 0 ≤ so d) ∧ ∀ d ∈ dn.operandBatchingDims, sliceSizes.getD d 0 = 1
+
+instance {so : Shape n} {si : Shape ni} {dn : GatherDimensionNumbers} {sliceSizes : List ℕ} :
+    Decidable (GatherLowers so si dn sliceSizes) :=
+  inferInstanceAs (Decidable (_ → _))
+
+/-- The entry of the array of integers `a` at the position `f`, and `0` if `f` is not a position of `a`. -/
+def readD {s : Shape n} (a : Index s → ℤ) (f : ℕ → ℕ) : ℤ :=
+  if h : ∀ d : Fin n, f d < s d then a fun d => ⟨f d, h d⟩ else 0
+
+/-- The position `operand_index` of the operand that belongs to position `j` of the result of a gather,
+or of the updates of a scatter. It is `none` if the window of `j` does not lie inside the operand.
+[StableHLO `gather`](https://openxla.org/stablehlo/spec#gather) defines
+`operand_index = full_start_index + full_batching_index + full_offset_index`:
+
+* `batchIndex a` is `batch_index[a]`, the position of `j` on batch axis `a` of the result,
+  which is its position on axis `a` of the indices.
+* `start d` is `full_start_index[d]`. If `d` is `start_index_map[c]`, it is entry `c` of the index vector
+  at `batch_index`, and 0 otherwise. If `clip`, it is clamped to `[0, dim(operand, d) - slice_sizes[d]]`.
+* `batching d` is `full_batching_index[d]`. If `d` is `operand_batching_dims[b]`,
+  it is `batch_index[start_indices_batching_dims[b]]`, and 0 otherwise.
+* `offset d` is `full_offset_index[d]`. If `d` is window axis `q` of the operand,
+  it is the position of `j` on axis `offset_dims[q]`, and 0 otherwise.
+
+The window of `j` lies inside the operand if `0 ≤ start d` and `start d + slice_sizes[d] ≤ dim(operand, d)`
+for every axis `d`. XLA clamps `start` in every gather, so `clip` is false only for the mask of `_gather_fill`.
+XLA does not clamp in a scatter: it drops the whole window if it does not lie inside the operand,
+where the formula of [StableHLO `scatter`](https://openxla.org/stablehlo/spec#scatter) drops single entries.
+`scripts/shapes.py` compares these positions with those of JAX on concrete indices. -/
+def gatherIndex (so : Shape n) (si : Shape ni) (dn : GatherDimensionNumbers) (sliceSizes : List ℕ)
+    (clip : Bool) (indices : Index si → ℤ) (j : ℕ → ℕ) : Option (Index so) :=
+  let batchIndex : ℕ → ℕ := fun a =>
+    j ((batchDims (dn.offsetDims.length + (ni - 1)) dn.offsetDims).getD a 0)
+  let start : ℕ → ℤ := fun d =>
+    if d ∈ dn.startIndexMap then
+      let v := readD indices fun a => if a = ni - 1 then dn.startIndexMap.idxOf d else batchIndex a
+      if clip then (v ⊔ 0) ⊓ ((so.sizeD d : ℤ) - (sliceSizes.getD d 0 : ℤ)) else v
+    else 0
+  let batching : ℕ → ℕ := fun d =>
+    if d ∈ dn.operandBatchingDims then
+      batchIndex (dn.startIndicesBatchingDims.getD (dn.operandBatchingDims.idxOf d) 0)
+    else 0
+  let offset : ℕ → ℕ := fun d =>
+    if d ∈ windowDims n dn then j (dn.offsetDims.getD ((windowDims n dn).idxOf d) 0) else 0
+  if h : ∀ d : Fin n, 0 ≤ start d ∧ start d + (sliceSizes.getD d 0 : ℤ) ≤ (so d : ℤ) ∧
+      start d + (batching d : ℤ) + (offset d : ℤ) < (so d : ℤ) then
+    some fun d => ⟨(start d + (batching d : ℤ) + (offset d : ℤ)).toNat, by have := h d; omega⟩
+  else none
+
+/-- `lax.gather`: every position of the result reads the position `gatherIndex` of the operand.
+`jax/_src/lax/slicing.py:322`; `unique_indices` and `indices_are_sorted` are dropped.
+It lowers to [StableHLO `gather`](https://openxla.org/stablehlo/spec#gather), which clamps the windows
+into the operand. In the mode `FILL_OR_DROP`, `_gather_fill` then replaces every window
+that did not lie inside the operand by `fill_value`, `jax/_src/lax/slicing.py:2177`:
+```
+  mask = lax.bitwise_and(
+      lax.ge(indices, index_dtype.type(0)),
+      lax.le(indices, lax.expand_dims(upper_bound, tuple(range(num_batch_dims)))))
+  mask = lax.reduce_and(mask, [num_batch_dims])
+  ...
+  return lax.select(
+    lax.broadcast_in_dim(mask, output_shape, batch_dims_in_output, ...),
+    gather_out, lax.full_like(gather_out, fill_value=fill_value))
+```
+`fillValue` is the `fill_value` of the mode `FILL_OR_DROP`, whose default for floating-point operands is NaN.
+In the other modes it is `None`, and the clamped windows lie inside the operand.
+The proof `_h` is the shape check of `_gather_shape_rule`, and `_hl` the constraints of XLA. -/
+def gather {so : Shape n} {si : Shape ni} (dimensionNumbers : GatherDimensionNumbers)
+    (sliceSizes : List ℕ) (mode : GatherScatterMode) (fillValue : Scalar)
+    (_h : GatherValid so si dimensionNumbers sliceSizes)
+    (_hl : GatherLowers so si dimensionNumbers sliceSizes)
+    (operand : Tensor (Index so)) (startIndices : Index si → ℤ) :
+    Tensor (Index (gatherShape si dimensionNumbers sliceSizes)) :=
+  fun j =>
+    match gatherIndex so si dimensionNumbers sliceSizes (mode != .fillOrDrop) startIndices j.val with
+    | some i => operand i
+    | none => fillValue
+
+/-- The slice sizes of the windows of a scatter: the size of the updates on axis `update_window_dims[q]`
+for window axis `q` of the operand, and 1 for the other axes.
+The rules of `scatter` and `_clamp_scatter_indices` compute them, `jax/_src/lax/slicing.py:2821`:
+```
+  slice_sizes = []
+  pos = 0
+  for i in range(len(operand.shape)):
+    if i in dnums.inserted_window_dims or i in dnums.operand_batching_dims:
+      slice_sizes.append(1)
+    else:
+      slice_sizes.append(updates.shape[dnums.update_window_dims[pos]])
+      pos += 1
+``` -/
+def scatterSliceSizes (n : ℕ) (su : Shape nu) (dn : ScatterDimensionNumbers) : List ℕ :=
+  (List.range n).map fun d =>
+    if d ∈ windowDims n dn.toGather then
+      su.sizeD (dn.updateWindowDims.getD ((windowDims n dn.toGather).idxOf d) 0)
+    else 1
+
+/-- The checks of `_scatter_shape_rule`, `jax/_src/lax/slicing.py:2458`, in its order:
+
+* the indices have an index vector axis,
+* the updates have one axis per axis of the indices other than the index vector, and one per window axis,
+* `update_window_dims` is strictly increasing and lists axes of the updates,
+* `inserted_window_dims` and `operand_batching_dims` are strictly increasing and list axes of the operand,
+* `operand_batching_dims` shares no axis with `inserted_window_dims` or `scatter_dims_to_operand_dims`,
+* `scatter_indices_batching_dims` does not repeat and lists axes of the indices other than the index vector,
+* the batching axes of the operand, of the indices and of the updates have the same sizes,
+* every axis of the operand is a window, inserted or batching axis,
+* `scatter_dims_to_operand_dims` has one entry per entry of the index vector,
+  lists axes of the operand and does not repeat,
+* no window of the updates is larger than the operand,
+* the scatter axes of the updates have the sizes of the axes of the indices. -/
+def ScatterValid (so : Shape n) (si : Shape ni) (su : Shape nu) (dn : ScatterDimensionNumbers) :
+    Prop :=
+  0 < ni ∧
+  nu = ni - 1 + dn.updateWindowDims.length ∧
+  dn.updateWindowDims.Pairwise (· < ·) ∧
+  (∀ d ∈ dn.updateWindowDims, d < nu) ∧
+  dn.insertedWindowDims.Pairwise (· < ·) ∧
+  (∀ d ∈ dn.insertedWindowDims, d < n) ∧
+  dn.operandBatchingDims.Pairwise (· < ·) ∧
+  (∀ d ∈ dn.operandBatchingDims, d < n) ∧
+  (∀ d ∈ dn.insertedWindowDims, d ∉ dn.operandBatchingDims) ∧
+  (∀ d ∈ dn.scatterDimsToOperandDims, d ∉ dn.operandBatchingDims) ∧
+  dn.scatterIndicesBatchingDims.Nodup ∧
+  (∀ d ∈ dn.scatterIndicesBatchingDims, d < ni - 1) ∧
+  dn.operandBatchingDims.map so.sizeD = dn.scatterIndicesBatchingDims.map si.sizeD ∧
+  dn.operandBatchingDims.map so.sizeD = dn.scatterIndicesBatchingDims.map
+    (fun a => su.sizeD ((batchDims nu dn.updateWindowDims).getD a 0)) ∧
+  n = dn.updateWindowDims.length + dn.insertedWindowDims.length + dn.operandBatchingDims.length ∧
+  dn.scatterDimsToOperandDims.length = si.sizeD (ni - 1) ∧
+  (∀ d ∈ dn.scatterDimsToOperandDims, d < n) ∧
+  dn.scatterDimsToOperandDims.Nodup ∧
+  (∀ q < dn.updateWindowDims.length,
+    su.sizeD (dn.updateWindowDims.getD q 0) ≤ so.sizeD ((windowDims n dn.toGather).getD q 0)) ∧
+  (∀ a < ni - 1, su.sizeD ((batchDims nu dn.updateWindowDims).getD a 0) = si.sizeD a)
+
+instance {so : Shape n} {si : Shape ni} {su : Shape nu} {dn : ScatterDimensionNumbers} :
+    Decidable (ScatterValid so si su dn) :=
+  inferInstanceAs (Decidable (_ ∧ _))
+
+/-- `lax.scatter_add`: every entry of the updates is added to the position `gatherIndex` of the operand,
+and the windows that do not lie inside the operand are dropped.
+`jax/_src/lax/slicing.py:472`; `unique_indices` and `indices_are_sorted` are dropped.
+It lowers to [StableHLO `scatter`](https://openxla.org/stablehlo/spec#scatter) with the update `add`.
+In the mode `CLIP`, `_scatter_lower` first clamps the indices with `_clamp_scatter_indices`,
+`jax/_src/lax/slicing.py:2830`:
+```
+  upper_bounds: core.Shape = tuple(operand.shape[i] - slice_sizes[i]
+                                   for i in dnums.scatter_dims_to_operand_dims)
+  ...
+  return lax.clamp(indices.dtype.type(0), indices, upper_bound)
+```
+The proof `_h` is the shape check of `_scatter_shape_rule`.
+
+XLA does not compute this for several empty index vectors, where `scatter_dims_to_operand_dims` is empty
+and the indices have a shape such as `(3, 0)`: it fails to compile for an operand of rank 0
+(`bugs/scatter-scalar-operand-compile.json`) and returns `operand + updates`
+for updates of the shape of the operand (`bugs/scatter-empty-index-vector-elementwise.json`).
+The model follows StableHLO there. -/
+def scatterAdd {so : Shape n} {si : Shape ni} {su : Shape nu}
+    (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
+    (_h : ScatterValid so si su dimensionNumbers)
+    (operand : Tensor (Index so)) (scatterIndices : Index si → ℤ) (updates : Tensor (Index su)) :
+    Tensor (Index so) :=
+  fun k => operand k + ∑ u with gatherIndex so si dimensionNumbers.toGather
+    (scatterSliceSizes n su dimensionNumbers) (mode == .clip) scatterIndices u.val = some k, updates u
+
+/-- `lax.scatter_sub`: every entry of the updates is subtracted from the position `gatherIndex` of the operand,
+and the windows that do not lie inside the operand are dropped, as in `scatterAdd`.
+`jax/_src/lax/slicing.py:557`; `unique_indices` and `indices_are_sorted` are dropped.
+It lowers to [StableHLO `scatter`](https://openxla.org/stablehlo/spec#scatter) with the update `subtract`. -/
+def scatterSub {so : Shape n} {si : Shape ni} {su : Shape nu}
+    (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
+    (_h : ScatterValid so si su dimensionNumbers)
+    (operand : Tensor (Index so)) (scatterIndices : Index si → ℤ) (updates : Tensor (Index su)) :
+    Tensor (Index so) :=
+  fun k => operand k + ∑ u with gatherIndex so si dimensionNumbers.toGather
+    (scatterSliceSizes n su dimensionNumbers) (mode == .clip) scatterIndices u.val = some k, -updates u
+
+end GatherScatter
+
 /-! ## Helpers of differentiation rules -/
 
 /-- The axes of rank `n` that are listed in `dimensions`. -/

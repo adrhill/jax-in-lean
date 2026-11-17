@@ -9,7 +9,7 @@ Sister repository of `../asdex`.
 Jax.lean, Jax/      # Model of JAX and proofs about it
 ├── Scalar.lean     # Array entries: reals, infinities and NaN
 ├── Shape.lean      # Shape, Index, broadcasting
-├── Core.lean       # Tensor, IsJvpOf, IsJvp₂Of, IsTransposeOf and variants, Arr, IsBatchOf₃
+├── Core.lean       # Tensor, IsJvpOf, IsJvp₂Of, IsTransposeOf and variants, Arr, IsBatchOf₁, IsBatchOf₃
 ├── Lax/Primal.lean # Primal semantics of every primitive, and helpers that rules call
 ├── Lax/Dynamic.lean # The primitives on arrays of any shape: `none` if a shape check fails
 ├── Lax/<Name>.lean # One file per lax primitive: differentiation rules and proofs
@@ -49,9 +49,11 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 - **Linear inputs.** A transpose rule that handles several linear inputs takes every argument as an `Option`,
   where `none` is an `ad.UndefinedPrimal`, and returns `none` if it raises (`IsPartialTranspose₂Of`).
 - **Branching on shapes.** A rule that branches on the shapes of its arguments, such as a batching rule,
-  is a function of `Arr`, an array of any shape, and returns `none` if it raises (`IsBatchOf₃`).
+  is a function of `Arr`, an array of any shape, and returns `none` if it raises (`IsBatchOf₁`, `IsBatchOf₃`).
   It calls the primitives of `Lax/Dynamic.lean`, which wrap those of `Lax/Primal.lean`.
 - **Booleans.** A boolean array of shape `s` is a function `Index s → Bool`, with no tangent.
+- **Indices.** An array of indices of shape `s`, as `gather` and `scatter` take it, is a function `Index s → ℤ`, with no tangent.
+  `scripts/shapes.py` also compares the positions that `gather` and `scatter_add` read and write with JAX on concrete indices.
 - **Computed shapes.** A rule has the output shape that its own code computes, even if it only equals the expected shape propositionally.
   Correctness notions compare arrays with `Tensor.Same`, so a rule that returns the wrong shape is refutable.
 - **Jaxpr level.** Model `lax` primitives and jaxprs, not Python or `jax.numpy`.
