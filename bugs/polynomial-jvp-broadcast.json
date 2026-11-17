@@ -1,7 +1,7 @@
 {
   "$schema": "../scripts/bug.schema.json",
   "title": "The JVP of `polynomial` has the wrong shape if the constant coefficient broadcasts `x`",
-  "status": "refuted",
+  "status": "proven",
   "primitive": "polynomial",
   "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:5265",

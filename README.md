@@ -37,7 +37,7 @@ mirror the source in Lean, state properties, and settle each one as proven or re
 A theorem here is about the Lean model, which is written by hand and can be wrong.
 What has to be trusted is the model, the theorem statements and the Lean kernel, not the proofs.
 A property refuted in Lean counts as a JAX bug only once a Python script reproduces it on the pinned JAX.
-A bug with the status `refuted` has been shown on JAX, and its cause has been proven in our model of JAX.
+A bug with the status `proven` has been shown on JAX, and its cause has been proven in our model of JAX.
 The script confirms the bug, and the Lean theorem explains it,
 which carries over to JAX only as far as the model is faithful to the source.
 

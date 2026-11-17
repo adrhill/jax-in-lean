@@ -32,7 +32,7 @@ def check(bug: dict) -> list[str]:
     status = bug["status"]
     if status not in STATUSES:
         return [f"status must be one of {STATUSES}"]
-    if status == "refuted" and bug["lean_refutation"] is None:
+    if status == "proven" and bug["lean_refutation"] is None:
         errors.append(f"status {status!r} needs a lean_refutation")
     if status in ("reported", "fixed") and bug["upstream_issue"] is None:
         errors.append(f"status {status!r} needs an upstream_issue")

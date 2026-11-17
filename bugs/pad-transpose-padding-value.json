@@ -1,7 +1,7 @@
 {
   "$schema": "../scripts/bug.schema.json",
   "title": "Reverse mode of `pad` raises with respect to `padding_value` alone",
-  "status": "refuted",
+  "status": "proven",
   "primitive": "pad",
   "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:8233",

@@ -12,8 +12,8 @@
       "type": "string"
     },
     "status": {
-      "description": "found: the reproducer shows the bug. refuted: the reproducer shows the bug, and a Lean theorem refutes our model of the rule. reported: an upstream issue exists. fixed: a JAX release contains a fix.",
-      "enum": ["found", "refuted", "reported", "fixed"]
+      "description": "found: the reproducer shows the bug. proven: the reproducer shows the bug, and a Lean theorem refutes our model of the rule. reported: an upstream issue exists. fixed: a JAX release contains a fix.",
+      "enum": ["found", "proven", "reported", "fixed"]
     },
     "primitive": {
       "description": "The lax primitive, as named in lax.",
@@ -54,7 +54,7 @@
     }
   },
   "allOf": [
-    { "if": { "properties": { "status": { "const": "refuted" } } }, "then": { "properties": { "lean_refutation": { "type": "string" } } } },
+    { "if": { "properties": { "status": { "const": "proven" } } }, "then": { "properties": { "lean_refutation": { "type": "string" } } } },
     { "if": { "properties": { "status": { "enum": ["reported", "fixed"] } } }, "then": { "properties": { "upstream_issue": { "type": "string" } } } },
     { "if": { "properties": { "status": { "const": "fixed" } } }, "then": { "required": ["fixed_in"] } }
   ]
