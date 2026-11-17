@@ -185,9 +185,17 @@ def IsZeroJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {α : Type}
     (f : Tensor (Index sx) → Tensor (Index sy) → Index t → α) : Prop :=
   IsZeroJvp₂OfOn f Set.univ
 
-/-! ## Transpose rules -/
+/-! ## Transpose rules
 
-/-- `tr` is a correct transpose rule for `f`:
+The names follow JAX, which calls these rules transposes.
+The correctness notions below state that a rule is the adjoint of the linear `f`
+with respect to the standard inner product `∑ i, u i * x i` of finite arrays,
+the precise term for maps between Euclidean spaces of any shapes.
+With this inner product, the adjoint is the transpose of the matrix of `f`
+and a cotangent has the shape of the output of `f`.
+-/
+
+/-- `tr` is a correct transpose rule for `f`, that is, the adjoint of `f`:
 on finite arrays, `f` returns a finite array, `tr` returns a finite array of the shape of the input,
 and pairing a cotangent `ct` with `f x` equals pairing `tr ct` with `x`.
 
