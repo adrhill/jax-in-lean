@@ -7,21 +7,26 @@
   "source": "jax/_src/lax/lax.py:9122",
   "lean_refutation": "Jax.Lax.reduceJvp_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/32474",
-  "description": [
+  "summary": [
     "The `lax.reduce` docstring only requires `computation` and `init_values` to form a monoid, which need not be commutative,",
     "and StableHLO `reduce` combines the entries in order.",
-    "`_reduce_jvp` instead differentiates `_reduce_tree`, which combines entry `i` of the first half with entry `i` of the second half.",
-    "For an associative computation that is not commutative, this changes the result,",
-    "so both the primal and the tangent that the rule returns are wrong.",
-    "With several `dimensions`, the rule also flattens them in the order of the `dimensions` tuple",
-    "instead of the lexicographic order of StableHLO.",
+    "For an associative computation that is not commutative,",
+    "the JVP rule of `reduce` returns a wrong primal and a wrong tangent.",
     "",
     "**Example.** `(x, y) ↦ select(y == 1, x, y)` keeps the last argument other than 1.",
     "It is associative with identity 1, and smooth wherever its second argument is not 1.",
     "On `[2, 3, 4]` the reduction returns 4, and near this point it is the last entry, with derivative `e_2`.",
-    "The tree reduces `[op(2, 4), op(3, 1)] = [4, 3]` to 3 and returns the tangent of the middle entry.",
-    "",
-    "**Lean.** `Jax.Lax.lastNotOne_assoc`, `lastNotOne_one_left` and `lastNotOne_one_right` show that this computation is a monoid,",
+    "The JVP rule instead reduces `[op(2, 4), op(3, 1)] = [4, 3]` to 3 and returns the tangent of the middle entry."
+  ],
+  "cause": [
+    "`_reduce_jvp` differentiates `_reduce_tree` instead, which combines entry `i` of the first half with entry `i` of the second half.",
+    "This order differs from that of StableHLO, which changes the result of a computation that is not commutative.",
+    "With several `dimensions`, the rule also flattens them in the order of the `dimensions` tuple",
+    "instead of the lexicographic order of StableHLO."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.lastNotOne_assoc`, `lastNotOne_one_left` and `lastNotOne_one_right` show that this computation is a monoid,",
     "and `lastNotOne_jvp_correct` that its JVP is correct where every entry differs from 1."
   ],
   "reproducer": [

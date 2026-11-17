@@ -4,7 +4,7 @@
   "description": "A bug in JAX found with the Lean model. The file name is the identifier of the bug.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "status", "primitive", "jax_version", "source", "lean_refutation", "upstream_issue", "description", "reproducer"],
+  "required": ["title", "status", "primitive", "jax_version", "source", "lean_refutation", "upstream_issue", "summary", "cause", "fix", "lean", "reproducer"],
   "properties": {
     "$schema": { "type": "string" },
     "title": {
@@ -41,10 +41,36 @@
       "description": "The first JAX version that contains a fix.",
       "type": "string"
     },
-    "description": {
-      "description": "What is wrong and why, in Markdown, one line per array entry.",
+    "summary": {
+      "description": "What goes wrong, as a user of JAX sees it, in Markdown, one line per array entry. The title, summary, cause, fix and reproducer stand alone, as in an upstream issue: they do not mention Lean, the model or files of this repository. scripts/bugs.py checks this.",
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "cause": {
+      "description": "Why it goes wrong, in the source of JAX or XLA, in Markdown, one line per array entry.",
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "fix": {
+      "description": "How to fix it, in Markdown, one line per array entry, or null if no fix is proposed.",
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "lean": {
+      "description": "How the Lean model covers the bug, or why it does not, in Markdown, one line per array entry. The only text that may refer to Lean or to this repository.",
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "related": {
+      "description": "The identifiers of related bugs, which the dashboard links to.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+      "minItems": 1,
+      "uniqueItems": true
     },
     "reproducer": {
       "description": "A Python script that runs on its own, one line per array entry. It prints what JAX computes, and a comment below each print states the output: `# output: <text>` where JAX is correct, and `# desired: <text>` followed by `# actual: <text>` where it is not. scripts/bugs.py checks that the script prints these outputs.",

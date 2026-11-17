@@ -7,14 +7,15 @@
   "source": "jax/_src/lax/slicing.py:2906",
   "lean_refutation": "Jax.Lax.scatterAddTranspose_not_correct",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`x.at[idx].add(u)` drops updates whose index is out of bounds.",
     "If `x` has size 0 on an indexed axis, every update is dropped, so the result is `x` and does not depend on `u`.",
     "Forward mode gets this right, but `jax.grad` with respect to `u` raises a `TypeError`.",
     "The same holds for `.at[idx].subtract(u)` and for `jax.ops.segment_sum` with `num_segments=0`.",
-    "`.at[idx].set(u)`, `.min(u)` and `.max(u)` raise even in forward mode.",
-    "",
-    "**Cause.** `_scatter_addsub_transpose_rule` reads the cotangent of the updates with a `gather`",
+    "`.at[idx].set(u)`, `.min(u)` and `.max(u)` raise even in forward mode."
+  ],
+  "cause": [
+    "`_scatter_addsub_transpose_rule` reads the cotangent of the updates with a `gather`",
     "that has slice size 1 on every inserted and batching axis:",
     "```",
     "update_t = gather(t, indices, dimension_numbers=gather_dnums,",
@@ -23,12 +24,14 @@
     "On an axis of size 0, `_gather_shape_rule` rejects this slice as larger than the operand.",
     "`_scatter_shape_rule` has no such check, because a scatter drops what does not fit.",
     "The JVP rules of `scatter` (`jax/_src/lax/slicing.py:3287`) and of `scatter_min` and `scatter_max` (`:3117`)",
-    "call a `gather` with the same slice sizes.",
-    "",
-    "**Fix.** If the operand is empty, return zeros of the shape of the updates,",
-    "and skip the `gather` in the JVP rules.",
-    "",
-    "**Lean.** `Jax.Lax.scatterAddTranspose_correct` proves the rule correct in the modes `CLIP` and `FILL_OR_DROP`",
+    "call a `gather` with the same slice sizes."
+  ],
+  "fix": [
+    "If the operand is empty, return zeros of the shape of the updates,",
+    "and skip the `gather` in the JVP rules."
+  ],
+  "lean": [
+    "`Jax.Lax.scatterAddTranspose_correct` proves the rule correct in the modes `CLIP` and `FILL_OR_DROP`",
     "wherever the `gather` passes its checks.",
     "`Jax.Lax.scatterAddTranspose_not_correct` shows that the rule raises for an operand of shape `(0,)`."
   ],

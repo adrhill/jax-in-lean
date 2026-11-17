@@ -7,23 +7,26 @@
   "source": "jax/_src/lax/windowed_reductions.py:704",
   "lean_refutation": null,
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`lax.reduce_window` accepts negative padding, which removes entries, as `lax.pad` does.",
     "If every window dimension and stride is 1 and the padding shrinks the operand,",
     "compilation fails a `CHECK` in XLA, which aborts the Python process with `SIGABRT` instead of raising.",
     "`lax.pad` with the same padding, a window of size 2, or a padding that keeps the size all work.",
     "The crash happens for `add`, `max` and generic computations, with and without `jit`,",
-    "and for the dimension of a 2-d operand. The variadic form with several operands works.",
-    "",
-    "**Cause.** In XLA. JAX emits a `stablehlo.reduce_window` with `padding = [[-1, 0]]`,",
+    "and for the dimension of a 2-d operand. The variadic form with several operands works."
+  ],
+  "cause": [
+    "In XLA. JAX emits a `stablehlo.reduce_window` with `padding = [[-1, 0]]`,",
     "which the StableHLO verifier accepts and the StableHLO reference interpreter evaluates to `[2.]`.",
     "`AlgebraicSimplifierVisitor::HandleReduceWindow` replaces a reduce window with a trivial window",
     "by an elementwise `add` of the operand's shape, ignoring the negative padding, and `ReplaceInstruction` fails:",
-    "`\"reduce-window\" (f64[1,1]) vs \"add\" (f64[2,1])`.",
-    "",
-    "**Fix.** In XLA. Until then, JAX can lower such a reduce window as a `pad` (a slice) followed by the elementwise operation.",
-    "",
-    "**Lean.** `reduce_window` is not modelled. `scripts/shapes.py` does not test it."
+    "`\"reduce-window\" (f64[1,1]) vs \"add\" (f64[2,1])`."
+  ],
+  "fix": [
+    "In XLA. Until then, JAX can lower such a reduce window as a `pad` (a slice) followed by the elementwise operation."
+  ],
+  "lean": [
+    "`reduce_window` is not modelled. `scripts/shapes.py` does not test it."
   ],
   "reproducer": [
     "import subprocess",

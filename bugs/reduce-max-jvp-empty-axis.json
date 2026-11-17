@@ -7,13 +7,14 @@
   "source": "jax/_src/lax/lax.py:9321",
   "lean_refutation": "Jax.Jaxpr.maxInitialJvp_not_correct",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`jnp.max(x, axis=..., initial=c)` and `jnp.min` with `initial` accept a reduced axis of size 0.",
     "The result is then the constant `c`, so its tangent is 0.",
     "Forward mode returns NaN instead, and the NaN reaches the Jacobian of arrays that are not empty.",
-    "Reverse mode is right.",
-    "",
-    "**Cause.** `_reduce_chooser_jvp_rule`, the JVP rule of `reduce_max` and `reduce_min`,",
+    "Reverse mode is right."
+  ],
+  "cause": [
+    "`_reduce_chooser_jvp_rule`, the JVP rule of `reduce_max` and `reduce_min`,",
     "divides the sum of the tangents at the positions of the maximum by the number of these positions:",
     "```",
     "counts = reduce_sum(location_indicators, axes)",
@@ -21,11 +22,13 @@
     "```",
     "Over an empty axis, `reduce_max` is `-∞` and there are no such positions, so the rule returns `0 / 0 = NaN`.",
     "`jnp.max` with `initial` traces to `max(c, reduce_max(x))`, and the JVP rule of `max` multiplies this NaN by 0.",
-    "Reverse mode transposes the same jaxpr, but the cotangent of an empty `x` has no entries, so the NaN is dropped.",
-    "",
-    "**Fix.** Divide by `max(counts, 1)`: the numerator is 0 wherever `counts` is.",
-    "",
-    "**Lean.** `Jax.Lax.reduceMaxJvp_correct` proves the rule correct where every maximum is attained at one position,",
+    "Reverse mode transposes the same jaxpr, but the cotangent of an empty `x` has no entries, so the NaN is dropped."
+  ],
+  "fix": [
+    "Divide by `max(counts, 1)`: the numerator is 0 wherever `counts` is."
+  ],
+  "lean": [
+    "`Jax.Lax.reduceMaxJvp_correct` proves the rule correct where every maximum is attained at one position,",
     "and `Jax.Lax.reduceMaxJvp_of_isEmpty` shows that it is NaN over an empty axis.",
     "For the jaxpr of `jnp.max(x, initial=0.)`, `Jax.Jaxpr.maxInitial_hasZeroJvp` proves that the derivative is 0",
     "and `Jax.Jaxpr.maxInitialJvp_not_correct` that forward mode is wrong."

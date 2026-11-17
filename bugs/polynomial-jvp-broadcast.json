@@ -7,19 +7,22 @@
   "source": "jax/_src/lax/lax.py:5265",
   "lean_refutation": "Jax.Lax.polynomialJvp_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/42480",
-  "description": [
+  "summary": [
     "`lax.polynomial(x, coeffs)` broadcasts `x` and all coefficients against each other.",
     "If only the constant coefficient `a_0` is larger than `x` along some axis, the primal is correct,",
     "but the tangent with respect to `x` has the shape of `x` instead of the shape of the result.",
     "So forward mode returns a tangent of the wrong shape, reverse mode raises a `ValueError`,",
-    "and `grad` of a sum silently returns a wrong value.",
-    "",
-    "**Cause.** `_polynomial_jvp` computes the tangent as `mul(dot_x, dy_dx)`,",
+    "and `grad` of a sum silently returns a wrong value."
+  ],
+  "cause": [
+    "`_polynomial_jvp` computes the tangent as `mul(dot_x, dy_dx)`,",
     "where `dy_dx = polynomial(x, deriv_coeffs)` broadcasts only `x` and the coefficients of positive degree.",
     "`a_0` drops out of the derivative and takes its shape with it,",
-    "and the tangent is never broadcast to the shape of the result.",
-    "",
-    "**Lean.** `Jax.Lax.polynomialJvp_correct` proves the rule correct if `a_0` broadcasts to the shape of `x` and the other coefficients.",
+    "and the tangent is never broadcast to the shape of the result."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.polynomialJvp_correct` proves the rule correct if `a_0` broadcasts to the shape of `x` and the other coefficients.",
     "The model has no rank-0 arrays, so `Jax.Lax.polynomialJvp_not_correct` uses a linear coefficient of shape `(1,)`.",
     "JAX behaves the same for the scalar coefficient `2.0` of the upstream issue."
   ],
@@ -31,7 +34,7 @@
     "x = jnp.array([0.5])",
     "a0 = jnp.array([1.0, 2.0, 3.0])",
     "",
-    "# The linear coefficient as an array of shape (1,), as in the Lean model, and as a scalar.",
+    "# The linear coefficient as an array of shape (1,) and as a scalar.",
     "f = lambda x: lax.polynomial(x, [a0, jnp.array([2.0])])",
     "g = lambda x: lax.polynomial(x, [a0, 2.0])",
     "",

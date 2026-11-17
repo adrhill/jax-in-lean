@@ -16,6 +16,7 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 │                   # (the six comparisons share Lax/Compare.lean)
 └── Jaxpr/<Name>.lean # Jaxprs of several primitives, e.g. from upstream issues
 bugs/<name>.json    # One record per JAX bug, with its reproducer
+bugs/CLAUDE.md      # How to write a bug record
 scripts/audit.sh    # Forbidden-token scan, build, bug reproducers
 scripts/bugs.py     # Checks the bug records and runs their reproducers
 scripts/shapes.py   # Shape-level differential test of the model against JAX
@@ -80,6 +81,7 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
   If a property is false, prove its negation with a concrete counterexample and keep both the statement and the refutation.
 - A refutation is a JAX bug only with a Python reproducer that shows it on the pinned JAX.
   Every bug gets a record `bugs/<name>.json` that follows `scripts/bug.schema.json`.
+  It reads as a self-contained issue on the JAX repository, as `bugs/CLAUDE.md` describes.
   If the model and real JAX disagree, the model is wrong: fix the model.
 - Theorem statements and model definitions are the trusted part and are reviewed by the user.
   Keep them short and readable, and point out new or changed ones when reporting work.

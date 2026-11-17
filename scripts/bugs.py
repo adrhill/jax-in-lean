@@ -21,6 +21,9 @@ ROOT = Path(__file__).parent.parent
 SCHEMA = json.loads((ROOT / "scripts" / "bug.schema.json").read_text())
 STATUSES = SCHEMA["properties"]["status"]["enum"]
 OUTPUT = re.compile(r"\s*# (output|desired|actual):\s+")
+# Text that refers to Lean or to this repository, which only the field `lean` may contain.
+INTERNAL = re.compile(r"\bLean\b|\bJax\.|\.lean\b|\bbugs/|\bscripts/|\b[Mm]odel(?:led|s)?\b")
+STANDALONE = ("title", "summary", "cause", "fix", "reproducer")
 
 
 def check(bug: dict) -> list[str]:
@@ -29,6 +32,19 @@ def check(bug: dict) -> list[str]:
     errors += [f"unknown key {key!r}" for key in bug if key not in SCHEMA["properties"]]
     if errors:
         return errors
+    for key in ("summary", "cause", "lean", "reproducer"):
+        if not bug[key]:
+            errors.append(f"{key} must not be empty")
+    if bug["fix"] == []:
+        errors.append("fix must be null or not empty")
+    for key in STANDALONE:
+        text = bug[key] or []
+        for line in [text] if isinstance(text, str) else text:
+            if match := INTERNAL.search(line):
+                errors.append(f"{key} refers to {match[0]!r}, which only lean may: {line}")
+    for name in bug.get("related", []):
+        if not (ROOT / "bugs" / f"{name}.json").exists():
+            errors.append(f"related bug {name!r} does not exist")
     status = bug["status"]
     if status not in STATUSES:
         return [f"status must be one of {STATUSES}"]

@@ -209,6 +209,12 @@ details.caput[open] > summary::before { transform: rotate(90deg); }
 .out .desired span { color: var(--gh-success); }
 .out .actual span { color: var(--gh-danger); }
 .out .actual { background: var(--gh-danger-subtle); }
+/* On a narrow page: a label column as wide as its labels, and tighter boxes. */
+@media (max-width: 640px) {
+  .out { min-width: 0; margin: 4px 16px 10px; }
+  .out > div { grid-template-columns: 58px 1fr; padding: 3px 10px 3px 8px; }
+  .out span { font-size: 10px; }
+}
 .gh svg { fill: currentColor; }
 .empty, .error { text-align: center; font-style: italic; color: var(--ink-faded); padding: 24px 0; }
 
@@ -365,6 +371,17 @@ function reproducer(bug) {
       : `<div class="out bug">${row("desired", part.desired)}${row("actual", part.actual)}</div>`;
   }).join("");
 }
+// The sections of a bug record, each but the summary led by its name in bold.
+function description(bug) {
+  const related = (bug.related || []).map((name) => `[\`${name}\`](#${name})`);
+  return [
+    bug.summary.join("\n"),
+    bug.cause && `**Cause.** ${bug.cause.join("\n")}`,
+    bug.fix && `**Fix.** ${bug.fix.join("\n")}`,
+    bug.lean && `**Lean.** ${bug.lean.join("\n")}`,
+    related.length && `**See also.** ${related.join(", ")}.`,
+  ].filter(Boolean).map(md).join("");
+}
 function render(bug) {
   const none = `<span class="none">–</span>`;
   const facts = [
@@ -382,7 +399,7 @@ function render(bug) {
     </summary>
     <div class="gh">
       <h3>Description</h3>
-      <div class="desc">${md(bug.description.join("\n"))}</div>
+      <div class="desc">${description(bug)}</div>
       <h3>Reproducer</h3>
       <div class="repro"><button class="copy" type="button" data-bug="${esc(bug.name)}">Copy</button>${reproducer(bug)}</div>
     </div>
@@ -393,7 +410,7 @@ function matches(bug) {
   if (state.status && bug.status !== state.status) return false;
   if (state.prim && bug.primitive !== state.prim) return false;
   if (!state.q) return true;
-  const hay = [bug.name, bug.title, bug.primitive, bug.source, bug.lean_refutation || "", ...bug.description].join(" ").toLowerCase();
+  const hay = [bug.name, bug.title, bug.primitive, bug.source, bug.lean_refutation || "", ...bug.summary, ...bug.cause, ...(bug.fix || []), ...bug.lean].join(" ").toLowerCase();
   return state.q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
 }
 

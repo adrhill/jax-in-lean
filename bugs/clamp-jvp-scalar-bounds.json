@@ -7,20 +7,23 @@
   "source": "jax/_src/lax/lax.py:7775",
   "lean_refutation": "Jax.Lax.clampJvpScalar_not_defined",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`lax.clamp` accepts bounds `min` and `max` that are scalars or have the shape of the operand `x`,",
     "and its own batching rule produces scalar bounds.",
     "If `x` is an array and a bound is a scalar,",
     "forward and reverse mode with respect to that bound raise a `TypeError`.",
-    "Differentiating with respect to `x` alone works.",
-    "",
-    "**Cause.** The JVP rules for `min` and `max` end in `select(pred, g, _zeros(operand))`,",
+    "Differentiating with respect to `x` alone works."
+  ],
+  "cause": [
+    "The JVP rules for `min` and `max` end in `select(pred, g, _zeros(operand))`,",
     "where the tangent `g` has the shape of the bound and `_zeros(operand)` the shape of `x`.",
-    "For a scalar bound the shapes differ, and `select_n` raises.",
-    "",
-    "**Fix.** Broadcast `g` to the shape of `x` in the JVP rules, and sum it back in their transposes.",
-    "",
-    "**Lean.** The shape check of `select` is a proof argument of the rules for scalar bounds,",
+    "For a scalar bound the shapes differ, and `select_n` raises."
+  ],
+  "fix": [
+    "Broadcast `g` to the shape of `x` in the JVP rules, and sum it back in their transposes."
+  ],
+  "lean": [
+    "The shape check of `select` is a proof argument of the rules for scalar bounds,",
     "`Jax.Lax.clampJvpMinScalar` and `Jax.Lax.clampJvpMaxScalar`.",
     "`Jax.Lax.clampJvpScalar_not_defined` shows that it does not follow from the shape checks of `clamp`,",
     "and `Jax.Lax.clampJvpScalar_defined_iff` that it holds exactly when `x` has rank 0."

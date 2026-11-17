@@ -7,12 +7,13 @@
   "source": "jax/_src/lax/lax.py:7766",
   "lean_refutation": "Jax.Lax.clampBatch_not_correct",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`lax.clamp` accepts bounds that are scalars or have the shape of the operand.",
     "`vmap` over `max` alone raises a `TypeError` if `min` and the operand are scalars.",
-    "It works if `min` is batched, with or without `max`, and if the operand is not a scalar.",
-    "",
-    "**Cause.** Under `vmap`, a batched scalar bound has shape `(size,)`,",
+    "It works if `min` is batched, with or without `max`, and if the operand is not a scalar."
+  ],
+  "cause": [
+    "Under `vmap`, a batched scalar bound has shape `(size,)`,",
     "so `_clamp_batch_rule` has to broadcast an unbatched scalar operand to that shape.",
     "Its general case does so only for a batched `min`:",
     "```",
@@ -21,11 +22,13 @@
     "    x = broadcast(x, min.shape)",
     "  return clamp_p.bind(min, x, max), 0",
     "```",
-    "If only `max` is batched, the operand stays a scalar, and `clamp_p.bind` rejects `max` of shape `(size,)`.",
-    "",
-    "**Fix.** Add the same branch for `max`.",
-    "",
-    "**Lean.** `Jax.Lax.clampBatch` transcribes the rule on arrays of any shape,",
+    "If only `max` is batched, the operand stays a scalar, and `clamp_p.bind` rejects `max` of shape `(size,)`."
+  ],
+  "fix": [
+    "Add the same branch for `max`."
+  ],
+  "lean": [
+    "`Jax.Lax.clampBatch` transcribes the rule on arrays of any shape,",
     "and `Jax.Lax.clampBatch_not_correct` shows that it raises for a batch of size 1.",
     "`scripts/shapes.py` checks the model against `_clamp_batch_rule` on 1500 combinations of shapes and batch axes",
     "(result shape, batch axis and raised cases):",

@@ -7,12 +7,13 @@
   "source": "jax/_src/lax/lax.py:8233",
   "lean_refutation": "Jax.Lax.padTranspose_not_correct",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`jax.grad` of `lax.pad` with respect to the padding value raises a `TypeError`,",
     "and so does `jax.grad` of `jnp.pad` with respect to `constant_values`.",
-    "Forward mode works, and so does reverse mode if the operand is differentiated as well.",
-    "",
-    "**Cause.** `pad` is linear in `operand` and `padding_value` jointly,",
+    "Forward mode works, and so does reverse mode if the operand is differentiated as well."
+  ],
+  "cause": [
+    "`pad` is linear in `operand` and `padding_value` jointly,",
     "and `_pad_transpose` returns a cotangent for each linear input:",
     "```",
     "t_operand = t_op() if ad.is_undefined_primal(operand) else None",
@@ -22,11 +23,13 @@
     "computed as the sum of `t` minus the sum of the cotangent of `operand`.",
     "If `operand` is not a linear input, `t_operand` is `None`, and `total(None)` raises in `reduce_sum`.",
     "This is always the case when reverse mode differentiates with respect to `padding_value` alone:",
-    "`linear_jvp` instantiates the zero tangent of `operand` as a constant, which is not a linear input.",
-    "",
-    "**Fix.** Compute `t_op()` whenever `padding_value` is a linear input.",
-    "",
-    "**Lean.** `Jax.Lax.padTranspose_correct` proves both cotangents correct where both arguments are linear inputs,",
+    "`linear_jvp` instantiates the zero tangent of `operand` as a constant, which is not a linear input."
+  ],
+  "fix": [
+    "Compute `t_op()` whenever `padding_value` is a linear input."
+  ],
+  "lean": [
+    "`Jax.Lax.padTranspose_correct` proves both cotangents correct where both arguments are linear inputs,",
     "also for negative and interior padding.",
     "`Jax.Lax.padTranspose_not_correct` shows that the rule raises for every padding configuration",
     "where `padding_value` is a linear input and `operand` is not."

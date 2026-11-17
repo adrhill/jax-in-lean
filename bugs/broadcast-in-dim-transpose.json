@@ -7,21 +7,30 @@
   "source": "jax/_src/lax/lax.py:7543",
   "lean_refutation": "Jax.Lax.broadcastInDimTranspose_not_correct",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order:",
     "its shape rule only rejects duplicates, and its docstring uses `broadcast_dimensions=(1, 0)` as an implicit transpose.",
     "For such dimensions the primal and forward mode are correct,",
     "but reverse mode raises a `ValueError` because the cotangent has the wrong shape.",
-    "",
-    "**Cause.** `_broadcast_in_dim_transpose_rule` sums the cotangent over the axes that are not in `broadcast_dimensions`",
+    "If the result shape equals the operand shape, even the primal is wrong."
+  ],
+  "cause": [
+    "`_broadcast_in_dim_transpose_rule` sums the cotangent over the axes that are not in `broadcast_dimensions`",
     "and restores the axes of size 1 with `expand_dims`.",
     "`reduce_sum` leaves the remaining axes in the order of the result,",
     "but the operand has them in the order of `broadcast_dimensions`.",
-    "The two orders agree only if `broadcast_dimensions` is increasing, and the rule never permutes the axes back.",
-    "",
-    "**Fix.** Transpose the summed cotangent back to the axis order of the operand.",
-    "",
-    "If the result shape equals the operand shape, even the primal is wrong, see `broadcast-in-dim-forwarding`."
+    "The two orders agree only if `broadcast_dimensions` is increasing, and the rule never permutes the axes back."
+  ],
+  "fix": [
+    "Transpose the summed cotangent back to the axis order of the operand."
+  ],
+  "lean": [
+    "`Jax.Lax.broadcastInDimTranspose_correct` proves the rule correct if `broadcast_dimensions` is strictly increasing,",
+    "and `Jax.Lax.broadcastInDimTranspose_not_correct` shows that for `broadcast_dimensions = (1, 0)`",
+    "it returns a cotangent of shape `(2, 3)` for an operand of shape `(3, 2)`."
+  ],
+  "related": [
+    "broadcast-in-dim-forwarding"
   ],
   "reproducer": [
     "import jax",

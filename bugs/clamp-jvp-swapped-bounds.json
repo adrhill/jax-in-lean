@@ -7,23 +7,26 @@
   "source": "jax/_src/lax/lax.py:7781",
   "lean_refutation": "Jax.Lax.clampJvp_not_correct",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`lax.clamp(min, x, max)` lowers to StableHLO `clamp`, which computes `minimum(maximum(x, min), max)`.",
     "So where `min > max`, the result is `max` for every `x`,",
     "and near a point with `x < max < min` the function is just `max`, with derivative 1 with respect to `max`.",
     "Forward and reverse mode return 0 instead.",
     "`jnp.clip`, which is built from `maximum` and `minimum`, gets the derivative right.",
     "",
-    "**Cause.** The rule for `min` guards against `min > max` with `lt(min, max)`, so it correctly returns 0 there.",
+    "The docstring of `lax.clamp` says the result is `min` where `x < min`, which disagrees with XLA where `min > max`."
+  ],
+  "cause": [
+    "The rule for `min` guards against `min > max` with `lt(min, max)`, so it correctly returns 0 there.",
     "The rule for `max`, `select(lt(max, operand), g, _zeros(operand))`, has no such guard:",
     "it returns the tangent of `max` only where `max < x`.",
-    "So where `x < max < min`, every rule returns 0.",
-    "",
-    "**Lean.** `Jax.Lax.clampJvp_correct` proves the three rules correct where every entry has",
+    "So where `x < max < min`, every rule returns 0."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.clampJvp_correct` proves the three rules correct where every entry has",
     "`x > max`, or `min < x < max`, or `x < min < max`.",
-    "At every other point where `clamp` is differentiable, some entry has `x <= max < min`, and the rules are wrong there.",
-    "",
-    "The docstring of `lax.clamp` says the result is `min` where `x < min`, which disagrees with XLA where `min > max`."
+    "At every other point where `clamp` is differentiable, some entry has `x <= max < min`, and the rules are wrong there."
   ],
   "reproducer": [
     "import jax",

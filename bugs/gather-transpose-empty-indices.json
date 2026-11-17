@@ -7,13 +7,14 @@
   "source": "jax/_src/lax/slicing.py:1961",
   "lean_refutation": "Jax.Lax.gatherTranspose_not_defined",
   "upstream_issue": null,
-  "description": [
+  "summary": [
     "`lax.gather` accepts slices that are larger than the operand if the indices are empty.",
     "With no index vectors at all, the result is empty, and forward mode works.",
     "Reverse mode raises a `TypeError` where it should return zeros.",
-    "`jnp` indexing does not emit such a gather.",
-    "",
-    "**Cause.** `_gather_shape_rule` checks that the slices fit only if the indices are not empty:",
+    "`jnp` indexing does not emit such a gather."
+  ],
+  "cause": [
+    "`_gather_shape_rule` checks that the slices fit only if the indices are not empty:",
     "```",
     "if not core.is_empty_shape(indices.shape) and not (",
     "    slice_size >= 0 and corresponding_input_size >= slice_size",
@@ -24,12 +25,14 @@
     "",
     "The same exception lets through gathers that cannot work at all.",
     "Indices of shape `(3, 0)` are empty, but they hold three index vectors of length 0, so the result is not empty.",
-    "With slices larger than the operand, such a gather passes the check and then fails to lower with an `MLIRError`.",
-    "",
-    "**Fix.** Skip the check only if the result is empty,",
-    "and let the transpose rule return zeros for an empty cotangent.",
-    "",
-    "**Lean.** `Jax.Lax.gatherTranspose` takes the shape check of `scatter_add` as a proof argument,",
+    "With slices larger than the operand, such a gather passes the check and then fails to lower with an `MLIRError`."
+  ],
+  "fix": [
+    "Skip the check only if the result is empty,",
+    "and let the transpose rule return zeros for an empty cotangent."
+  ],
+  "lean": [
+    "`Jax.Lax.gatherTranspose` takes the shape check of `scatter_add` as a proof argument,",
     "and `Jax.Lax.gatherTranspose_not_defined` shows that the shape check of `gather` does not imply it.",
     "Where it holds, `Jax.Lax.gatherTranspose_correct` proves the rule correct in the modes `CLIP` and `FILL_OR_DROP`."
   ],
