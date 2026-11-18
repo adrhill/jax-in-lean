@@ -325,7 +325,7 @@ def reshape {s : Shape m} (newSizes : Shape n) (h : ∏ d, s d = ∏ d, newSizes
 
 /-! ## Polynomials -/
 
-/-- Horner's rule for the coefficients `a 0, …, a K` at `x`, in the order of `_polynomial_lower`:
+/-- Horner's rule for the coefficients `a 0, …, a K` at `x`, as the unrolled loop of `_polynomial_lower`:
 `acc` starts at the coefficient of highest degree, and each step computes `add(mul(acc, x), c)`.
 `jax/_src/lax/lax.py:5297`:
 ```
@@ -339,11 +339,39 @@ noncomputable def horner (x : Scalar w) : {K : ℕ} → (Fin (K + 1) → Scalar 
   | 0, a => a 0
   | _ + 1, a => horner x (Fin.tail a) * x + a 0
 
+/-- Horner's rule for the coefficients `a 0, …, a K` at `x`, as the `scan` of `_polynomial_lower`:
+`acc` starts at zero, and each step computes `add(mul(acc, x), c)` for `c = a K, …, a 0`.
+`jax/_src/lax/lax.py:5309`:
+```
+  b_coeffs = [_maybe_broadcast(coeff_shape, c, coeff_sharding) for c in reversed(coeffs)]
+  y, _ = control_flow.scan(
+      lambda acc, c: (add(mul(acc, x), c), None),
+      full_like(x, 0, shape=out_shape, sharding=out_sharding),
+      stack(b_coeffs, axis=0),
+      unroll=unroll_threshold,
+  )
+``` -/
+noncomputable def hornerScan (x : Scalar w) : {K : ℕ} → (Fin (K + 1) → Scalar w) → Scalar w
+  | 0, a => 0 * x + a 0
+  | _ + 1, a => hornerScan x (Fin.tail a) * x + a 0
+
+/-- One entry of `lax.polynomial` for the coefficients `a 0, …, a K` at `x`.
+With one coefficient, `lax.polynomial` returns it and does not bind `polynomial_p`.
+Otherwise `_polynomial_lower` unrolls Horner's rule for at most `unroll` coefficients,
+and runs a `scan` for more. `jax/_src/lax/lax.py:5295`:
+```
+def _polynomial_lower(x, *coeffs, unroll=None):
+  unroll_threshold = 8 if unroll is None else unroll
+  if len(coeffs) <= unroll_threshold:
+``` -/
+noncomputable def polynomialEntry (unroll : Option ℕ) (x : Scalar w) {K : ℕ} (a : Fin (K + 1) → Scalar w) :
+    Scalar w :=
+  if K = 0 ∨ K + 1 ≤ unroll.getD 8 then horner x a else hornerScan x a
+
 /-- `lax.polynomial` with at least one coefficient, `a 0 + x * (a 1 + … + x * a K)`,
 which broadcasts `x` and all coefficients against each other.
 With two or more coefficients this is the primitive `polynomial_p`.
 The proof `h` is the shape check of `broadcasting_shape_rule`, `jax/_src/lax/lax.py:4503`.
-`unroll` is dropped, and the semantics are those of the unrolled loop in `_polynomial_lower`.
 `jax/_src/lax/lax.py:4104`:
 ```
   if len(c_args) == 1:
@@ -354,10 +382,10 @@ The proof `h` is the shape check of `broadcasting_shape_rule`, `jax/_src/lax/lax
   return polynomial_p.bind(x, *c_args, **kwargs)
 ``` -/
 noncomputable def polynomial {K : ℕ} {sx : Shape n} {sc : Fin (K + 1) → Shape n}
-    (h : BroadcastableAll (sx :: List.ofFn sc)) (x : Tensor (.float w) (Index sx))
+    (h : BroadcastableAll (sx :: List.ofFn sc)) (unroll : Option ℕ) (x : Tensor (.float w) (Index sx))
     (coeffs : (k : Fin (K + 1)) → Tensor (.float w) (Index (sc k))) :
     Tensor (.float w) (Index (broadcastShapes (sx :: List.ofFn sc))) :=
-  fun j => horner (x (j.unbroadcast (broadcastsTo_broadcastShapes h List.mem_cons_self)))
+  fun j => polynomialEntry unroll (x (j.unbroadcast (broadcastsTo_broadcastShapes h List.mem_cons_self)))
     fun k => coeffs k (j.unbroadcast (broadcastsTo_broadcastShapes h
       (List.mem_cons_of_mem _ (List.mem_ofFn.2 ⟨k, rfl⟩))))
 

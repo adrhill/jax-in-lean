@@ -12,6 +12,9 @@ Only the branch of the JVP rule for the tangent of `x` is modelled,
 for coefficients that are constants and so have symbolic zero tangents.
 The JVP rule is correct if the constant coefficient does not broadcast `x`,
 and returns a tangent of the wrong shape for `x` of shape `(1,)` and a constant coefficient of shape `(3,)`.
+
+At `x = ∞`, the result of `polynomial` depends on `unroll`:
+the `scan` of `_polynomial_lower` starts from `0 * ∞`, which is NaN.
 -/
 
 @[expose] public section
@@ -53,10 +56,10 @@ def _polynomial_jvp(primals, tangents, *, unroll=None):
     dy_dx = polynomial(x, deriv_coeffs, unroll=unroll)
     dot_y = ad.add_tangents(dot_y, mul(dot_x, dy_dx))
 ``` -/
-noncomputable def polynomialJvp (h : BroadcastableAll (sx :: List.ofFn sc))
+noncomputable def polynomialJvp (h : BroadcastableAll (sx :: List.ofFn sc)) (unroll : Option ℕ)
     (coeffs : (k : Fin (K + 2)) → Tensor (.float w) (Index (sc k))) (dotX x : Tensor (.float w) (Index sx)) :=
   mul (broadcastsTo_broadcastShapes (broadcastableAll_derivCoeffs h) List.mem_cons_self).broadcastable
-    dotX (polynomial (broadcastableAll_derivCoeffs h) x (polynomialDerivCoeffs coeffs))
+    dotX (polynomial (broadcastableAll_derivCoeffs h) unroll x (polynomialDerivCoeffs coeffs))
 
 /-! ## Horner's rule on real numbers -/
 
@@ -71,6 +74,23 @@ private theorem horner_fin (x : ℝ) : ∀ {K : ℕ} (a : Fin (K + 1) → ℝ),
     show horner (.fin x) (fun k => .fin (Fin.tail a k)) * .fin x + .fin (a 0) = _
     rw [horner_fin]
     rfl
+
+private theorem hornerScan_fin (x : ℝ) : ∀ {K : ℕ} (a : Fin (K + 1) → ℝ),
+    hornerScan (.fin x : Scalar w) (fun k => .fin (a k)) = .fin (hornerR x a)
+  | 0, a => by
+    show (0 : Scalar w) * .fin x + .fin (a 0) = _
+    simp [Scalar.zero_def, hornerR]
+  | _ + 1, a => by
+    show hornerScan (.fin x) (fun k => .fin (Fin.tail a k)) * .fin x + .fin (a 0) = _
+    rw [hornerScan_fin]
+    rfl
+
+private theorem polynomialEntry_fin (unroll : Option ℕ) (x : ℝ) {K : ℕ} (a : Fin (K + 1) → ℝ) :
+    polynomialEntry unroll (.fin x : Scalar w) (fun k => .fin (a k)) = .fin (hornerR x a) := by
+  unfold polynomialEntry
+  split_ifs
+  · exact horner_fin x a
+  · exact hornerScan_fin x a
 
 private theorem hornerR_add (x : ℝ) : ∀ {K : ℕ} (a b : Fin (K + 1) → ℝ),
     hornerR x (fun k => a k + b k) = hornerR x a + hornerR x b
@@ -106,10 +126,11 @@ private theorem hasDerivAt_hornerR (x : ℝ) : ∀ {K : ℕ} (a : Fin (K + 2) �
 
 /-- The JVP rule of `polynomial` computes the derivative of `polynomial` in `x`
 if the constant coefficient broadcasts to the shape of `x` and the other coefficients. -/
-theorem polynomialJvp_correct (h : BroadcastableAll (sx :: List.ofFn sc))
+theorem polynomialJvp_correct (h : BroadcastableAll (sx :: List.ofFn sc)) (unroll : Option ℕ)
     (coeffs : (k : Fin (K + 2)) → Index (sc k) → ℝ)
     (h0 : BroadcastsTo (sc 0) (broadcastShapes (sx :: List.ofFn fun k : Fin (K + 1) => sc k.succ))) :
-    IsJvpOf (polynomialJvp h fun k => ofReal (coeffs k)) (polynomial (w := w) h · fun k => ofReal (coeffs k)) := by
+    IsJvpOf (polynomialJvp h unroll fun k => ofReal (coeffs k))
+      (polynomial (w := w) h unroll · fun k => ofReal (coeffs k)) := by
   intro x _
   have hx := broadcastsTo_broadcastShapes h List.mem_cons_self
   have hc : ∀ k, BroadcastsTo (sc k) (broadcastShapes (sx :: List.ofFn sc)) := fun k =>
@@ -120,7 +141,7 @@ theorem polynomialJvp_correct (h : BroadcastableAll (sx :: List.ofFn sc))
   refine ⟨fun y j => hornerR (y (ux j)) (a j), ContinuousLinearMap.pi fun j =>
     hornerR (x (ux j)) (fun k : Fin (K + 1) => ((k : ℝ) + 1) * a j k.succ) •
       ContinuousLinearMap.proj (ux j), ?_, ?_, fun g => ?_⟩
-  · exact .of_forall fun y => funext fun j => horner_fin _ _
+  · exact .of_forall fun y => funext fun j => polynomialEntry_fin _ _ _
   · exact hasFDerivAt_pi.2 fun j => hasFDerivAt_elementwise x (ux j) (hasDerivAt_hornerR _ _)
   -- The shape `W` of `x` and the coefficients of positive degree.
   have hmem : ∀ s ∈ (sx :: List.ofFn fun k : Fin (K + 1) => sc k.succ), s ∈ sx :: List.ofFn sc := by
@@ -168,7 +189,7 @@ theorem polynomialJvp_correct (h : BroadcastableAll (sx :: List.ofFn sc))
       simp only [Index.unbroadcast_val, broadcastShape] at *
       split_ifs <;> omega
     simp only [polynomialJvp, mul, binop, polynomial, polynomialDerivCoeffs, constMul, ofReal, e1, e2,
-      e3, Scalar.fin_mul_fin, horner_fin]
+      e3, Scalar.fin_mul_fin, polynomialEntry_fin]
     simp only [ContinuousLinearMap.pi_apply, smul_apply,
       ContinuousLinearMap.proj_apply, smul_eq_mul, a]
     exact congrArg Scalar.fin (mul_comm _ _)
@@ -176,16 +197,72 @@ theorem polynomialJvp_correct (h : BroadcastableAll (sx :: List.ofFn sc))
 /-- The JVP rule of `polynomial` is wrong if the constant coefficient broadcasts `x`:
 for `x` of shape `(1,)` and coefficients of shapes `(3,)` and `(1,)`,
 it returns a tangent of shape `(1,)` instead of `(3,)`. -/
-theorem polynomialJvp_not_correct
+theorem polynomialJvp_not_correct (unroll : Option ℕ)
     (coeffs : (k : Fin 2) → Index ((![![3], ![1]] : Fin 2 → Shape 1) k) → ℝ) :
-    ¬ IsJvpOf (polynomialJvp (sx := ![1]) (by unfold BroadcastableAll Broadcastable; decide)
+    ¬ IsJvpOf (polynomialJvp (sx := ![1]) (by unfold BroadcastableAll Broadcastable; decide) unroll
         fun k => ofReal (coeffs k))
-      (polynomial (w := w) (by unfold BroadcastableAll Broadcastable; decide) · fun k => ofReal (coeffs k)) := by
+      (polynomial (w := w) (by unfold BroadcastableAll Broadcastable; decide) unroll
+        · fun k => ofReal (coeffs k)) := by
   intro hj
   obtain ⟨_, _, _, _, hrule⟩ := hj 0 (Set.mem_univ _)
   obtain ⟨_, hn, hs, _⟩ := hrule 0
   have h0 := hs 0
   rw [show Fin.cast hn 0 = (0 : Fin 1) from rfl] at h0
   exact absurd h0 (by decide)
+
+/-! ## `unroll` at infinity -/
+
+private theorem hornerScan_posInf : ∀ {K : ℕ} (a : Fin (K + 1) → Scalar w), hornerScan .posInf a = .nan
+  | 0, a => by
+    show (0 : Scalar w) * .posInf + a 0 = .nan
+    have : (0 : Scalar w) * .posInf = .nan := by simp [HMul.hMul, Mul.mul, Scalar.mul, Scalar.infWithSign]
+    rw [this]
+    cases a 0 <;> rfl
+  | _ + 1, a => by
+    show hornerScan .posInf (Fin.tail a) * .posInf + a 0 = .nan
+    rw [hornerScan_posInf]
+    cases a 0 <;> rfl
+
+private theorem horner_posInf_one : ∀ {K : ℕ}, horner (.posInf : Scalar w) (fun _ : Fin (K + 2) => 1) = .posInf
+  | 0 => by
+    show (1 : Scalar w) * .posInf + 1 = .posInf
+    simp [Scalar.one_def, HMul.hMul, Mul.mul, Scalar.mul, Scalar.infWithSign]
+    rfl
+  | _ + 1 => by
+    show horner .posInf (fun _ => (1 : Scalar w)) * .posInf + 1 = .posInf
+    rw [horner_posInf_one]
+    rfl
+
+/-- With more coefficients than `unroll` (8 if it is `none`),
+`polynomial` is NaN at `x = ∞` whatever the coefficients. -/
+theorem polynomial_posInf_of_lt (h : BroadcastableAll (sx :: List.ofFn sc)) {unroll : Option ℕ}
+    (hu : unroll.getD 8 < K + 2) (coeffs : (k : Fin (K + 2)) → Tensor (.float w) (Index (sc k))) :
+    polynomial h unroll (fun _ => .posInf) coeffs = fun _ => .nan := by
+  funext j
+  unfold polynomial polynomialEntry
+  rw [ite_eq_right_of_eq_false _ _ (eq_false (by omega))]
+  exact hornerScan_posInf _
+
+/-- With at most `unroll` coefficients (8 if it is `none`), all of them `1`,
+`polynomial` is `∞` at `x = ∞`. -/
+theorem polynomial_posInf_of_le (h : BroadcastableAll (sx :: List.ofFn sc)) {unroll : Option ℕ}
+    (hu : K + 2 ≤ unroll.getD 8) :
+    polynomial (w := w) h unroll (fun _ => .posInf) (fun _ _ => 1) = fun _ => .posInf := by
+  funext j
+  unfold polynomial polynomialEntry
+  rw [ite_eq_left_of_eq_true _ _ (eq_true (by omega))]
+  exact horner_posInf_one
+
+/-- `unroll` changes the result of `polynomial`:
+`1 + x + x ^ 2` at `x = ∞` is `∞` with the default `unroll` and NaN with `unroll = 1`. -/
+theorem polynomial_unroll_not_independent :
+    ¬ ∀ (unroll unroll' : Option ℕ) (x : Tensor (.float w) (Index (![] : Shape 0)))
+      (coeffs : (k : Fin 3) → Tensor (.float w) (Index ((fun _ => ![]) k : Shape 0))),
+      polynomial (by unfold BroadcastableAll Broadcastable; decide) unroll x coeffs =
+        polynomial (by unfold BroadcastableAll Broadcastable; decide) unroll' x coeffs := by
+  intro hu
+  have := congrFun (hu none (some 1) (fun _ => .posInf) fun _ _ => 1) fun d => d.elim0
+  rw [polynomial_posInf_of_le _ (by decide), polynomial_posInf_of_lt _ (by decide)] at this
+  exact absurd this (by simp)
 
 end Jax.Lax

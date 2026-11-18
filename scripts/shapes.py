@@ -1076,11 +1076,11 @@ def lean_spec(prim, p):
         n, k = len(p["sx"]), len(p["sc"])
         SC = f"(![{', '.join(map(lshape, p['sc']))}] : Fin {k} → Shape {n})"
         imp = f"(sx := {SX}) (sc := {SC}) {W} PROOF0"
-        primal = f"Lax.polynomial {imp} 0 (fun _ => 0)"
+        primal = f"Lax.polynomial {imp} none 0 (fun _ => 0)"
         terms = {"primal": primal}
         vjp = []
         if k >= 2:
-            terms["jvp"] = f"polynomialJvp {imp} (fun _ => 0) 0 0"
+            terms["jvp"] = f"polynomialJvp {imp} none (fun _ => 0) 0 0"
             vjp = [("jvp", "primal")]
         arg = f"BroadcastableAll ({SX} :: List.ofFn {SC})"
         return [(arg, ("BroadcastableAll", "Broadcastable"))], terms, vjp
@@ -1379,7 +1379,7 @@ def dtype_term(p):
         coeffs = f"(fun _ => 0 : (k : Fin 2) → Tensor ({LDT[dts[1]]}) (Index ({SC} k)))"
         return (
             f"Lax.polynomial (sx := {v2}) (sc := {SC}) "
-            f"(by unfold BroadcastableAll Broadcastable; decide) {arr(0, [2])} {coeffs}"
+            f"(by unfold BroadcastableAll Broadcastable; decide) none {arr(0, [2])} {coeffs}"
         )
     if of == "pad":
         return (
