@@ -13,15 +13,15 @@ Differentiation rules of the `sin` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `sin`.
 `jax/_src/lax/lax.py:4928`: `ad.defjvp(sin_p, lambda g, x, accuracy: mul(g, cos(x, accuracy=accuracy)))` -/
-noncomputable def sinJvp (g x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def sinJvp (g x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   mul (.refl s) g (cos x)
 
 /-- The JVP rule of `sin` computes the derivative of `sin`. -/
-theorem sinJvp_correct : IsJvpOf sinJvp (sin (ι := Index s)) := by
+theorem sinJvp_correct : IsJvpOf sinJvp (sin (ι := Index s) (w := w)) := by
   intro x _
   refine ⟨fun y i => Real.sin (y i),
     ContinuousLinearMap.pi fun i => Real.cos (x i) • ContinuousLinearMap.proj i, ?_, ?_, ?_⟩

@@ -17,13 +17,13 @@ are differentiated through `associative_scan` and are not modelled.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `cumsum`, which applies the primitive to the tangent.
 `jax/_src/lax/control_flow/loops.py:3251`: `ad.deflinear2(cumsum_p, _cumsum_transpose_rule)` and
 `jax/_src/interpreters/ad.py:950`: `return val_out, primitive.bind(*tangents, **params)` -/
-def cumsumJvp (axis : Fin n) (reverse : Bool) (operandDot _operand : Tensor (Index s)) :
-    Tensor (Index s) :=
+def cumsumJvp (axis : Fin n) (reverse : Bool) (operandDot _operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index s) :=
   cumsum axis reverse operandDot
 
 /-- The transpose rule of `cumsum`, the cumulative sum in the other direction.
@@ -32,7 +32,7 @@ def cumsumJvp (axis : Fin n) (reverse : Bool) (operandDot _operand : Tensor (Ind
 def _cumsum_transpose_rule(t, operand, *, axis: int, reverse: bool):
   return [cumsum(t, axis=axis, reverse=not reverse)]
 ``` -/
-def cumsumTranspose (axis : Fin n) (reverse : Bool) (t : Tensor (Index s)) : Tensor (Index s) :=
+def cumsumTranspose (axis : Fin n) (reverse : Bool) (t : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) :=
   cumsum axis (!reverse) t
 
 /-- `cumsum` on finite arrays. -/
@@ -43,18 +43,18 @@ private def cumsumReal (axis : Fin n) (reverse : Bool) : (Index s → ℝ) →�
   map_smul' _ _ := by ext; simp [Finset.mul_sum]
 
 private theorem cumsum_ofReal (axis : Fin n) (reverse : Bool) (x : Index s → ℝ) :
-    cumsum axis reverse (ofReal x) = ofReal (cumsumReal axis reverse x) := by
+    cumsum (w := w) axis reverse (ofReal x) = ofReal (cumsumReal axis reverse x) := by
   funext j
   simp [cumsum, ofReal, cumsumReal, Scalar.fin_sum]
 
 /-- The JVP rule of `cumsum` computes the derivative of `cumsum`. -/
 theorem cumsumJvp_correct (axis : Fin n) (reverse : Bool) :
-    IsJvpOf (cumsumJvp axis reverse) (cumsum (s := s) axis reverse) :=
+    IsJvpOf (cumsumJvp axis reverse) (cumsum (s := s) (w := w) axis reverse) :=
   isJvpOf_of_linear (cumsumReal axis reverse) (cumsum_ofReal axis reverse)
 
 /-- The transpose rule of `cumsum` transposes `cumsum`. -/
 theorem cumsumTranspose_correct (axis : Fin n) (reverse : Bool) :
-    IsTransposeOf (cumsumTranspose axis reverse) (cumsum (s := s) axis reverse) := by
+    IsTransposeOf (cumsumTranspose axis reverse) (cumsum (s := s) (w := w) axis reverse) := by
   intro ct x
   refine ⟨cumsumReal axis reverse x, cumsumReal axis (!reverse) ct, cumsum_ofReal axis reverse x,
     .of_eq (cumsum_ofReal axis (!reverse) ct), ?_⟩
@@ -99,7 +99,7 @@ private theorem insertNth_same {s : Shape (n + 1)} (p : Fin (n + 1)) (i : Fin (s
 
 /-- `cumsum` along an axis other than `p` acts on every entry along `p` separately. -/
 private theorem cumsum_insertNth {s : Shape (n + 1)} (p : Fin (n + 1)) (axis : Fin n)
-    (reverse : Bool) (x : Tensor (Index s)) (i : Fin (s p)) (j : Index (Fin.removeNth p s)) :
+    (reverse : Bool) (x : Tensor (.float w) (Index s)) (i : Fin (s p)) (j : Index (Fin.removeNth p s)) :
     cumsum (p.succAbove axis) reverse x (Fin.insertNth (α := fun d => Fin (s d)) p i j) =
       cumsum (s := Fin.removeNth p s) axis reverse
         (fun k => x (Fin.insertNth (α := fun d => Fin (s d)) p i k)) j := by
@@ -133,13 +133,19 @@ theorem cumsumBatch_correct (axis : ℕ) (reverse : Bool) :
     IsBatchOf₁ (cumsumBatch axis reverse) (Arr.cumsum · axis reverse) := by
   rintro size ⟨⟨shape, val⟩, bdim⟩ hsize hHas hb hf
   obtain ⟨d, rfl⟩ := Option.isSome_iff_exists.1 hb
-  rename_i rank
+  rename_i rank dt
   obtain ⟨hd, hshape⟩ : ∃ h : d < rank, shape ⟨d, h⟩ = size := hHas d rfl
   obtain ⟨m, rfl⟩ : ∃ m, rank = m + 1 := ⟨rank - 1, by omega⟩
   let p : Fin (m + 1) := ⟨d, hd⟩
   have hget : ∀ i (hi : i < size), Batched.get ⟨⟨shape, val⟩, some d⟩ i = some ⟨Fin.removeNth p shape,
       fun j => val (Fin.insertNth (α := fun e => Fin (shape e)) p ⟨i, hshape ▸ hi⟩ j)⟩ :=
     fun i hi => Arr.unbatch_mk shape val p (hshape ▸ hi)
+  -- `cumsum` accepts the entries of the batch, so they are floating-point arrays.
+  obtain ⟨w, rfl⟩ : ∃ w, dt = .float w := by
+    obtain ⟨a0, ha0, hsome⟩ := hf 0 hsize
+    rw [hget 0 hsize] at ha0
+    obtain rfl := Option.some.inj ha0
+    cases dt <;> simp [Arr.cumsum] at hsome ⊢
   -- `cumsum` accepts the entries of the batch, so `axis` is one of their axes.
   have haxis : axis < m := by
     obtain ⟨a0, ha0, hsome⟩ := hf 0 hsize
@@ -155,7 +161,7 @@ theorem cumsumBatch_correct (axis : ℕ) (reverse : Bool) :
     split_ifs <;> rfl
   refine ⟨⟨⟨shape, cumsum ⟨_, haxis'⟩ reverse val⟩, some d⟩, ?_, fun i hi => ?_⟩
   · simp [cumsumBatch, Arr.cumsum, Nat.lt_succ_iff.1 haxis']
-  · let xi : Tensor (Index (Fin.removeNth p shape)) :=
+  · let xi : Tensor (.float w) (Index (Fin.removeNth p shape)) :=
       fun j => val (Fin.insertNth (α := fun e => Fin (shape e)) p ⟨i, hshape ▸ hi⟩ j)
     refine ⟨⟨_, xi⟩, ⟨_, cumsum ⟨axis, haxis⟩ reverse xi⟩, _, hget i hi, ?_,
       Arr.unbatch_mk shape _ p (hshape ▸ hi), .of_eq (funext fun j => ?_)⟩

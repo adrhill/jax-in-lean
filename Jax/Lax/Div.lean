@@ -18,25 +18,25 @@ For a zero divisor, `x ↦ x / 0` does not map real arrays to real arrays (`div_
 
 namespace Jax.Lax
 
-variable {n : ℕ} {sx sy : Shape n}
+variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `div` for its first argument.
 `jax/_src/lax/lax.py:5628`: `lambda g, x, y: div(g, y)` -/
-noncomputable def divJvpLeft (h : Broadcastable sx sy) (g _x : Tensor (Index sx))
-    (y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def divJvpLeft (h : Broadcastable sx sy) (g _x : Tensor (.float w) (Index sx))
+    (y : Tensor (.float w) (Index sy)) : Tensor (.float w) (Index (broadcastShape sx sy)) :=
   div h g y
 
 /-- The JVP rule of `div` for its second argument.
 `jax/_src/lax/lax.py:5629`: `lambda g, x, y: mul(mul(neg(g), x), integer_pow(y, -2))` -/
-noncomputable def divJvpRight (h : Broadcastable sx sy) (g : Tensor (Index sy))
-    (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape (broadcastShape sy sx) sy)) :=
+noncomputable def divJvpRight (h : Broadcastable sx sy) (g : Tensor (.float w) (Index sy))
+    (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape (broadcastShape sy sx) sy)) :=
   mul (broadcastsTo_left sy sx).broadcastable.symm (mul h.symm (neg g) x) (integerPow (-2) y)
 
 /-- The right rule of `div` on finite arrays where `y` has no zeros. -/
 private theorem divJvpRight_same (h : Broadcastable sx sy) (k : Index sy → ℝ) (x : Index sx → ℝ)
     (y : Index sy → ℝ) (hy : ∀ j : Index (broadcastShape sx sy), y (j.unbroadcast h.right) ≠ 0) :
-    (divJvpRight h (ofReal k) (ofReal x) (ofReal y)).Same (ofReal fun j =>
+    (divJvpRight (w := w) h (ofReal k) (ofReal x) (ofReal y)).Same (ofReal (w := w) fun j =>
       -k (j.unbroadcast h.right) * x (j.unbroadcast (broadcastsTo_left sx sy)) *
         y (j.unbroadcast h.right) ^ (-2 : ℤ)) := by
   refine Tensor.same_of_shape_eq (fun d => ?_) fun i j hij => ?_
@@ -63,7 +63,7 @@ private theorem divJvpRight_same (h : Broadcastable sx sy) (k : Index sy → ℝ
 
 /-- The JVP rules of `div` compute the derivative of `div` where the divisor has no zeros. -/
 theorem divJvp_correct (h : Broadcastable sx sy) :
-    IsJvp₂OfOn (divJvpLeft h) (divJvpRight h) (div h)
+    IsJvp₂OfOn (divJvpLeft h) (divJvpRight h) (div (w := w) h)
       {p | ∀ j : Index (broadcastShape sx sy), p.2 (j.unbroadcast h.right) ≠ 0} := by
   intro x y hy
   let ux : Index (broadcastShape sx sy) → Index sx :=
@@ -121,14 +121,14 @@ def _div_transpose_rule(cotangent, x, y):
   else:
     return [_unbroadcast(x.aval, div(cotangent, y)), None]
 ``` -/
-noncomputable def divTranspose (h : Broadcastable sx sy) (y : Tensor (Index sy))
-    (cotangent : Tensor (Index (broadcastShape sx sy))) : Tensor (Index sx) :=
+noncomputable def divTranspose (h : Broadcastable sx sy) (y : Tensor (.float w) (Index sy))
+    (cotangent : Tensor (.float w) (Index (broadcastShape sx sy))) : Tensor (.float w) (Index sx) :=
   unbroadcast sx (divTranspose_broadcastsTo h) (div h.right.broadcastable.symm cotangent y)
 
 /-- The transpose rule of `div` transposes `div` with a fixed divisor that has no zeros. -/
 theorem divTranspose_correct (h : Broadcastable sx sy) (y : Index sy → ℝ)
     (hy : ∀ j : Index (broadcastShape sx sy), y (j.unbroadcast h.right) ≠ 0) :
-    IsTransposeOf (divTranspose h (ofReal y)) (div h · (ofReal y)) := by
+    IsTransposeOf (divTranspose h (ofReal y)) (div (w := w) h · (ofReal y)) := by
   intro ct x
   let ux : Index (broadcastShape sx sy) → Index sx := fun j => j.unbroadcast (broadcastsTo_left sx sy)
   let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right
@@ -155,13 +155,13 @@ theorem divTranspose_correct (h : Broadcastable sx sy) (y : Index sy → ℝ)
 /-- No transpose rule is correct for `x ↦ x / 0`: it does not map real arrays to real arrays,
 because `0 / 0` is NaN. -/
 theorem div_zero_not_isTransposeOf {s : Shape n} [Nonempty (Index s)]
-    (tr : Tensor (Index (broadcastShape s s)) → Tensor (Index s)) :
+    (tr : Tensor (.float w) (Index (broadcastShape s s)) → Tensor (.float w) (Index s)) :
     ¬ IsTransposeOf tr (div (.refl s) · (ofReal 0)) := by
   intro htr
   obtain ⟨y, -, hy, -⟩ := htr 0 0
   obtain ⟨i⟩ := ‹Nonempty (Index s)›
   have := congrFun hy fun d => ⟨i d, by simp [broadcastShape]⟩
-  have h0 : (Scalar.fin 0 / Scalar.fin 0 : Scalar) = .nan := by
+  have h0 : (Scalar.fin 0 / Scalar.fin 0 : Scalar w) = .nan := by
     show (if (0 : ℝ) = 0 then Scalar.infWithSign 0 else _) = _
     simp [Scalar.infWithSign]
   simp only [div, binop, ofReal, Pi.zero_apply, h0] at this

@@ -14,32 +14,32 @@ Differentiation rules of the `max` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {sx sy : Shape n}
+variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `max` for its first argument.
 `jax/_src/lax/lax.py:5644`: `lambda g, x, y: mul(g, _balanced_cmp(x, y))` -/
-noncomputable def maxJvpLeft (h : Broadcastable sx sy) (g x : Tensor (Index sx))
-    (y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx (broadcastShape sx sy))) :=
+noncomputable def maxJvpLeft (h : Broadcastable sx sy) (g x : Tensor (.float w) (Index sx))
+    (y : Tensor (.float w) (Index sy)) : Tensor (.float w) (Index (broadcastShape sx (broadcastShape sx sy))) :=
   mul (broadcastable_left sx sy) g (balancedCmp h x y)
 
 /-- The JVP rule of `max` for its second argument.
 `jax/_src/lax/lax.py:5645`: `lambda g, x, y: mul(g, _balanced_cmp(y, x))` -/
-noncomputable def maxJvpRight (h : Broadcastable sx sy) (g : Tensor (Index sy))
-    (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sy (broadcastShape sy sx))) :=
+noncomputable def maxJvpRight (h : Broadcastable sx sy) (g : Tensor (.float w) (Index sy))
+    (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sy (broadcastShape sy sx))) :=
   mul (broadcastable_left sy sx) g (balancedCmp h.symm y x)
 
 /-- `_balanced_cmp` on real numbers. -/
 private noncomputable def cmp (a b : ℝ) : ℝ := if a > b then 1 else if a = b then 1 / 2 else 0
 
-private theorem cmp_fin (a b : ℝ) : balancedCmpScalar (.fin a) (.fin b) = .fin (cmp a b) := by
+private theorem cmp_fin (a b : ℝ) : balancedCmpScalar (.fin a : Scalar w) (.fin b) = .fin (cmp a b) := by
   unfold balancedCmpScalar cmp
   simp only [Scalar.gt_fin, Scalar.eq_fin]
   split_ifs <;> rfl
 
 /-- The left rule of `max` on finite arrays. -/
 private theorem maxJvpLeft_same (h : Broadcastable sx sy) (g x : Index sx → ℝ) (y : Index sy → ℝ) :
-    (maxJvpLeft h (ofReal g) (ofReal x) (ofReal y)).Same (ofReal fun j =>
+    (maxJvpLeft (w := w) h (ofReal g) (ofReal x) (ofReal y)).Same (ofReal (w := w) fun j =>
       g (j.unbroadcast (broadcastsTo_left sx sy)) *
         cmp (x (j.unbroadcast (broadcastsTo_left sx sy))) (y (j.unbroadcast h.right))) := by
   refine Tensor.same_of_shape_eq (fun d => ?_) fun i j hij => ?_
@@ -55,7 +55,7 @@ private theorem maxJvpLeft_same (h : Broadcastable sx sy) (g x : Index sx → �
 /-- The right rule of `max` on finite arrays. -/
 private theorem maxJvpRight_same (h : Broadcastable sx sy) (g : Index sy → ℝ) (x : Index sx → ℝ)
     (y : Index sy → ℝ) :
-    (maxJvpRight h (ofReal g) (ofReal x) (ofReal y)).Same (ofReal fun j =>
+    (maxJvpRight (w := w) h (ofReal g) (ofReal x) (ofReal y)).Same (ofReal (w := w) fun j =>
       g (j.unbroadcast h.right) *
         cmp (y (j.unbroadcast h.right)) (x (j.unbroadcast (broadcastsTo_left sx sy)))) := by
   have hs : ∀ d, broadcastShape sy sx d = broadcastShape sx sy d := fun d => by
@@ -84,7 +84,7 @@ private theorem maxJvpRight_same (h : Broadcastable sx sy) (g : Index sy → ℝ
 
 /-- The JVP rules of `max` compute the derivative of `max` where the arguments differ everywhere. -/
 theorem maxJvp_correct (h : Broadcastable sx sy) :
-    IsJvp₂OfOn (maxJvpLeft h) (maxJvpRight h) (max h)
+    IsJvp₂OfOn (maxJvpLeft h) (maxJvpRight h) (max (w := w) h)
       {p | ∀ j : Index (broadcastShape sx sy),
         p.1 (j.unbroadcast (broadcastsTo_left sx sy)) ≠ p.2 (j.unbroadcast h.right)} := by
   intro x y hxy
@@ -126,7 +126,7 @@ theorem maxJvp_correct (h : Broadcastable sx sy) :
 No other rule would be correct there either, so this is a convention of JAX and not a bug.
 The counterexample has shape `(1,)` and `x = y = 0`. -/
 theorem maxJvp_not_correct :
-    ¬ IsJvp₂Of (maxJvpLeft (.refl ![1])) (maxJvpRight (.refl ![1])) (max (.refl ![1])) := by
+    ¬ IsJvp₂Of (maxJvpLeft (.refl ![1])) (maxJvpRight (.refl ![1])) (max (w := w) (.refl ![1])) := by
   intro hmax
   obtain ⟨F, L, hF, hL, hrule⟩ := hmax 0 0 (Set.mem_univ _)
   let j₀ : Index (broadcastShape ![1] ![1]) := fun _ => ⟨0, by simp [broadcastShape]⟩

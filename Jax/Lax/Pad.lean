@@ -20,7 +20,7 @@ See `bugs/pad-transpose-padding-value.json`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n} {sv : Shape 0}
+variable {n : ℕ} {s : Shape n} {sv : Shape 0} {w : FloatWidth}
 
 /-- The JVP rule of `pad`, which applies the primitive to the tangents.
 The tangents come first, then the primals.
@@ -28,9 +28,9 @@ The tangents come first, then the primals.
 `jax/_src/interpreters/ad.py:950`: `return val_out, primitive.bind(*tangents, **params)` -/
 noncomputable def padJvp (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (operandDot : Tensor (Index s)) (paddingValueDot : Tensor (Index sv))
-    (_operand : Tensor (Index s)) (_paddingValue : Tensor (Index sv)) :
-    Tensor (Index (padShape s lo hi interior)) :=
+    (operandDot : Tensor (.float w) (Index s)) (paddingValueDot : Tensor (.float w) (Index sv))
+    (_operand : Tensor (.float w) (Index s)) (_paddingValue : Tensor (.float w) (Index sv)) :
+    Tensor (.float w) (Index (padShape s lo hi interior)) :=
   pad lo hi interior h operandDot paddingValueDot
 
 /-- The shape check of the `pad` in `_pad_transpose`, which undoes the edge padding. -/
@@ -71,8 +71,8 @@ def _pad_transpose(t, operand, padding_value, *, padding_config):
 ``` -/
 noncomputable def padTransposeOperand (s : Shape n) (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (t : Tensor (Index (padShape s lo hi interior))) :
-    Tensor (Index (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0)
+    (t : Tensor (.float w) (Index (padShape s lo hi interior))) :
+    Tensor (.float w) (Index (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0)
       (interior + 1))) :=
   slice 0 _ (interior + 1) (fun _ => le_rfl) (fun _ => Nat.zero_le _)
     (fun d => Nat.succ_pos (interior d))
@@ -88,8 +88,8 @@ the sum of the cotangent minus the sum of the cotangent of `operand`.
 ``` -/
 noncomputable def padTransposePaddingValue (s : Shape n) (lo hi : Fin n → ℤ)
     (interior : Fin n → ℕ) (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (t : Tensor (Index (padShape s lo hi interior))) :
-    Tensor (Index (broadcastShape (padShape s lo hi interior ∘ keptAxes Finset.univ)
+    (t : Tensor (.float w) (Index (padShape s lo hi interior))) :
+    Tensor (.float w) (Index (broadcastShape (padShape s lo hi interior ∘ keptAxes Finset.univ)
       (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0) (interior + 1) ∘
         keptAxes Finset.univ))) :=
   sub (broadcastable_total _ _) (reduceSum Finset.univ t)
@@ -107,11 +107,11 @@ and the result `none` is a raised exception:
 ``` -/
 noncomputable def padTranspose (s : Shape n) (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (t : Tensor (Index (padShape s lo hi interior))) (operand : Option (Tensor (Index s)))
-    (paddingValue : Option (Tensor (Index sv))) :
-    Option (Option (Tensor (Index (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0)
+    (t : Tensor (.float w) (Index (padShape s lo hi interior))) (operand : Option (Tensor (.float w) (Index s)))
+    (paddingValue : Option (Tensor (.float w) (Index sv))) :
+    Option (Option (Tensor (.float w) (Index (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0)
         (interior + 1)))) ×
-      Option (Tensor (Index (broadcastShape (padShape s lo hi interior ∘ keptAxes Finset.univ)
+      Option (Tensor (.float w) (Index (broadcastShape (padShape s lo hi interior ∘ keptAxes Finset.univ)
         (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0) (interior + 1) ∘
           keptAxes Finset.univ))))) :=
   let tOperand := if operand.isNone then some (padTransposeOperand s lo hi interior h t) else none
@@ -169,36 +169,36 @@ private noncomputable def padReal (lo hi : Fin n → ℤ) (interior : Fin n → 
 private theorem pad_ofReal (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Index s → ℝ)
     (v : Index sv → ℝ) :
-    pad lo hi interior h (ofReal x) (ofReal v) = ofReal (padReal lo hi interior (x, v)) := by
+    pad (d := .float w) lo hi interior h (ofReal x) (ofReal v) = ofReal (padReal lo hi interior (x, v)) := by
   funext j
   simp only [pad, padReal, ofReal, Hits, LinearMap.coe_mk, AddHom.coe_mk]
   exact (apply_dite Scalar.fin _ _ _).symm
 
 private theorem pad_of_hits {lo hi : Fin n → ℤ} {interior : Fin n → ℕ}
-    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (Index s))
-    (v : Tensor (Index sv)) {i : Index s} {j : Index (padShape s lo hi interior)}
+    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (.float w) (Index s))
+    (v : Tensor (.float w) (Index sv)) {i : Index s} {j : Index (padShape s lo hi interior)}
     (hij : Hits lo interior i j) : pad lo hi interior h x v j = x i :=
   dite_choose (p := fun i => Hits lo interior i j) x _ hij fun _ hi' => Hits.left_unique hi' hij
 
 private theorem pad_of_not_hits {lo hi : Fin n → ℤ} {interior : Fin n → ℕ}
-    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (Index s))
-    (v : Tensor (Index sv)) {j : Index (padShape s lo hi interior)}
+    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (.float w) (Index s))
+    (v : Tensor (.float w) (Index sv)) {j : Index (padShape s lo hi interior)}
     (hj : ¬ ∃ i : Index s, Hits lo interior i j) :
     pad lo hi interior h x v j = v fun d => d.elim0 := by
   simp only [pad, hj, ↓reduceDIte]
 
 /-- `pad` reads entry `i` of `operand` at the position that `i` is padded to. -/
 theorem pad_apply_of_eq {lo hi : Fin n → ℤ} {interior : Fin n → ℕ}
-    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (Index s))
-    (v : Tensor (Index sv)) {i : Index s} {j : Index (padShape s lo hi interior)}
+    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (.float w) (Index s))
+    (v : Tensor (.float w) (Index sv)) {i : Index s} {j : Index (padShape s lo hi interior)}
     (hij : ∀ d, ((j d : ℕ) : ℤ) = lo d + (i d : ℕ) * ((interior d : ℤ) + 1)) :
     pad lo hi interior h x v j = x i :=
   pad_of_hits h x v hij
 
 /-- `pad` reads `padding_value` at the positions that no entry of `operand` is padded to. -/
 theorem pad_apply_of_not_exists {lo hi : Fin n → ℤ} {interior : Fin n → ℕ}
-    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (Index s))
-    (v : Tensor (Index sv)) {j : Index (padShape s lo hi interior)}
+    (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) (x : Tensor (.float w) (Index s))
+    (v : Tensor (.float w) (Index sv)) {j : Index (padShape s lo hi interior)}
     (hj : ¬ ∃ i : Index s, ∀ d, ((j d : ℕ) : ℤ) = lo d + (i d : ℕ) * ((interior d : ℤ) + 1)) :
     pad lo hi interior h x v j = v fun d => d.elim0 :=
   pad_of_not_hits h x v hj
@@ -258,7 +258,7 @@ private theorem unpad_apply (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (ct : Index (padShape s lo hi interior) → ℝ)
     (k : Index (padShape (padShape s lo hi interior) (-lo) (-hi) 0)) (i : Index s)
     (hk : ∀ d, (k d : ℕ) = i d * (interior d + 1)) :
-    pad (sv := ![]) (-lo) (-hi) 0 (padTranspose_unpad lo hi interior h) (ofReal ct) 0 k =
+    pad (d := .float w) (sv := ![]) (-lo) (-hi) 0 (padTranspose_unpad lo hi interior h) (ofReal ct) 0 k =
       .fin (padTransposeReal lo hi interior ct i) := by
   have hiff : ∀ j : Index (padShape s lo hi interior),
       Hits (-lo) 0 j k ↔ Hits lo interior i j := fun j => forall_congr' fun d => by
@@ -280,17 +280,17 @@ private theorem unpad_apply (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
 private theorem padTransposeOperand_same (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
     (ct : Index (padShape s lo hi interior) → ℝ) :
-    (padTransposeOperand s lo hi interior h (ofReal ct)).Same
-      (ofReal (padTransposeReal lo hi interior ct)) := by
+    (padTransposeOperand (w := w) s lo hi interior h (ofReal ct)).Same
+      (ofReal (w := w) (padTransposeReal lo hi interior ct)) := by
   refine Tensor.same_of_shape_eq (padTransposeOperand_shape lo hi interior h) fun i' i hii => ?_
   simp only [padTransposeOperand, slice]
   exact unpad_apply lo hi interior h ct _ i fun d => by simp [hii d]
 
 /-- The sum over all axes of an array with the finite entries `y`. -/
-private theorem total_same {t t' : Shape n} {a : Tensor (Index t')} {y : Index t → ℝ}
-    (h : a.Same (ofReal y)) (k : Index (t' ∘ keptAxes Finset.univ)) :
+private theorem total_same {t t' : Shape n} {a : Tensor (.float w) (Index t')} {y : Index t → ℝ}
+    (h : a.Same (ofReal (w := w) y)) (k : Index (t' ∘ keptAxes Finset.univ)) :
     reduceSum Finset.univ a k = .fin (∑ i, y i) := by
-  obtain ⟨_, hs, hv⟩ := h
+  obtain ⟨_, hs, hv⟩ := h.apply_eq
   rw [Scalar.fin_sum]
   simp only [reduceSum]
   rw [sum_filter_index_congr (s := t') (t := t) (fun d => by simpa using hs d)
@@ -304,10 +304,10 @@ private theorem total_same {t t' : Shape n} {a : Tensor (Index t')} {y : Index t
 private theorem padTransposePaddingValue_same (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
     (ct : Index (padShape s lo hi interior) → ℝ) :
-    (padTransposePaddingValue s lo hi interior h (ofReal ct)).Same
-      (ofReal fun _ : Index sv => ∑ j, ct j - ∑ i, padTransposeReal lo hi interior ct i) := by
+    (padTransposePaddingValue (w := w) s lo hi interior h (ofReal ct)).Same
+      (ofReal (w := w) fun _ : Index sv => ∑ j, ct j - ∑ i, padTransposeReal lo hi interior ct i) := by
   have hr : (Finset.univ : Finset (Fin n))ᶜ.card = 0 := by simp
-  refine ⟨hr, fun d => (Fin.cast hr d).elim0, fun a b _ => ?_⟩
+  refine ⟨rfl, hr, fun d => (Fin.cast hr d).elim0, fun a b _ => ?_⟩
   simp only [padTransposePaddingValue, sub, binop, ofReal]
   rw [total_same (.of_eq rfl), total_same (padTransposeOperand_same lo hi interior h ct)]
   simp [sub_eq_add_neg]
@@ -353,7 +353,7 @@ private theorem sum_match {α β : Type} [Fintype α] [Fintype β] (M : α → �
 /-- The JVP rule of `pad` computes the derivative of `pad`. -/
 theorem padJvp_correct (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) :
-    IsJointJvp₂Of (padJvp (sv := sv) lo hi interior h) (pad lo hi interior h) := by
+    IsJointJvp₂Of (padJvp (sv := sv) lo hi interior h) (pad (d := .float w) lo hi interior h) := by
   intro x v _
   let F := padReal (s := s) (sv := sv) lo hi interior
   let L := LinearMap.toContinuousLinearMap F
@@ -365,7 +365,7 @@ where `operand` and `padding_value` are both linear inputs. -/
 theorem padTranspose_correct (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) :
     IsTranspose₂Of (padTransposeOperand s lo hi interior h)
-      (padTransposePaddingValue s lo hi interior h) (pad (sv := sv) lo hi interior h) := by
+      (padTransposePaddingValue s lo hi interior h) (pad (d := .float w) (sv := sv) lo hi interior h) := by
   classical
   intro ct x v
   refine ⟨padReal lo hi interior (x, v), padTransposeReal lo hi interior ct,
@@ -389,7 +389,7 @@ theorem padTranspose_correct (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
 `padTranspose` returns the two cotangents of `padTranspose_correct`. -/
 theorem padTranspose_none_none (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (t : Tensor (Index (padShape s lo hi interior))) :
+    (t : Tensor (.float w) (Index (padShape s lo hi interior))) :
     padTranspose (sv := sv) s lo hi interior h t none none =
       some (some (padTransposeOperand s lo hi interior h t),
         some (padTransposePaddingValue s lo hi interior h t)) :=
@@ -400,7 +400,7 @@ it raises where `padding_value` is a linear input and `operand` is not. -/
 theorem padTranspose_not_correct (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1)) :
     ¬ IsPartialTranspose₂Of (padTranspose (sv := sv) s lo hi interior h)
-      (pad lo hi interior h) := by
+      (pad (d := .float w) lo hi interior h) := by
   rintro ⟨_, _, _, hrule⟩
   obtain ⟨_, _, hsome, _⟩ := hrule 0 (some 0) none (.inr rfl)
   simp [padTranspose] at hsome

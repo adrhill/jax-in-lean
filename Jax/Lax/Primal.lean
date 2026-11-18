@@ -8,53 +8,59 @@ public import Jax.Core
 What each `lax` primitive computes, and the helper functions that differentiation rules call.
 The semantics are those of the `lax` docstrings and the [StableHLO spec](https://openxla.org/stablehlo/spec).
 They live in one file because the rules of one primitive call other primitives.
+
+Arguments that a primitive requires to have the same dtype share the dtype in its type.
+Floating-point primitives take a width `w`, and those that only move entries,
+such as `pad`, `slice` and `broadcastInDim`, take any dtype `d`.
+Comparisons return booleans, and the indices of `gather` and `scatter` are integers of a width `wi`.
+Integer semantics of the arithmetic primitives are not modelled.
 -/
 
 @[expose] public section
 
 namespace Jax.Lax
 
-variable {ι : Type} {m n : ℕ}
+variable {ι : Type} {m n : ℕ} {w : FloatWidth} {wi : IntWidth} {d : DType}
 
 /-! ## Elementwise unary primitives -/
 
 /-- `lax.neg`, elementwise negation. `jax/_src/lax/lax.py:248` -/
-def neg (x : Tensor ι) : Tensor ι := fun i => -x i
+def neg (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => -x i
 
 /-- `lax.sin`, elementwise sine. `jax/_src/lax/lax.py:735`; `accuracy` is dropped -/
-noncomputable def sin (x : Tensor ι) : Tensor ι := fun i => (x i).sin
+noncomputable def sin (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).sin
 
 /-- `lax.cos`, elementwise cosine. `jax/_src/lax/lax.py:768`; `accuracy` is dropped -/
-noncomputable def cos (x : Tensor ι) : Tensor ι := fun i => (x i).cos
+noncomputable def cos (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).cos
 
 /-- `lax.log`, elementwise natural logarithm. `jax/_src/lax/lax.py:570`; `accuracy` is dropped -/
-noncomputable def log (x : Tensor ι) : Tensor ι := fun i => (x i).log
+noncomputable def log (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).log
 
 /-- `lax.exp`, elementwise exponential. `jax/_src/lax/lax.py:475`; `accuracy` is dropped.
 It lowers to [StableHLO `exponential`](https://openxla.org/stablehlo/spec#exponential). -/
-noncomputable def exp (x : Tensor ι) : Tensor ι := fun i => (x i).exp
+noncomputable def exp (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).exp
 
 /-- `lax.sqrt`, elementwise square root. `jax/_src/lax/lax.py:990`; `accuracy` is dropped.
 It lowers to [StableHLO `sqrt`](https://openxla.org/stablehlo/spec#sqrt),
 which is `squareRoot` of IEEE 754: NaN at negative numbers. -/
-noncomputable def sqrt (x : Tensor ι) : Tensor ι := fun i => (x i).sqrt
+noncomputable def sqrt (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).sqrt
 
 /-- `lax.sign`, the elementwise sign. `jax/_src/lax/lax.py:268`.
 It lowers to [StableHLO `sign`](https://openxla.org/stablehlo/spec#sign). -/
-noncomputable def sign (x : Tensor ι) : Tensor ι := fun i => (x i).sign
+noncomputable def sign (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).sign
 
 /-- `lax.floor`, the elementwise floor. `jax/_src/lax/lax.py:342`.
 It lowers to [StableHLO `floor`](https://openxla.org/stablehlo/spec#floor),
 which is `roundToIntegralTowardNegative` of IEEE 754. -/
-noncomputable def floor (x : Tensor ι) : Tensor ι := fun i => (x i).floor
+noncomputable def floor (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).floor
 
 /-- `lax.abs`, the elementwise absolute value. `jax/_src/lax/lax.py:922`.
 It lowers to [StableHLO `abs`](https://openxla.org/stablehlo/spec#abs). -/
-noncomputable def abs (x : Tensor ι) : Tensor ι := fun i => (x i).abs
+noncomputable def abs (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => (x i).abs
 
 /-- The loop of `_integer_pow`, which multiplies `acc` by `x ^ y` by repeated squaring.
 `none` is the empty product. -/
-noncomputable def integerPowLoop (acc : Option Scalar) (x : Scalar) (y : ℕ) : Option Scalar :=
+noncomputable def integerPowLoop (acc : Option (Scalar w)) (x : Scalar w) (y : ℕ) : Option (Scalar w) :=
   if y = 0 then acc else
     integerPowLoop (if y % 2 = 1 then some (match acc with | none => x | some a => a * x) else acc)
       (if y / 2 > 0 then x * x else x) (y / 2)
@@ -62,7 +68,7 @@ termination_by y
 decreasing_by omega
 
 /-- `_integer_pow` on one entry. The assertion `acc is not None` holds because `y ≠ 0`. -/
-noncomputable def integerPowScalar (y : ℤ) (x : Scalar) : Scalar :=
+noncomputable def integerPowScalar (y : ℤ) (x : Scalar w) : Scalar w :=
   if y = 0 then 1 else
     let acc := (integerPowLoop none x y.natAbs).getD 0
     if y < 0 then 1 / acc else acc
@@ -90,63 +96,64 @@ def _integer_pow(x, *, y):
 ```
 `_integer_pow_lowering` emits `x`, `x * x`, `x * x * x` and `1 / x` for `y = 1, 2, 3, -1`,
 which agree with `_integer_pow` because multiplication is commutative. -/
-noncomputable def integerPow (y : ℤ) (x : Tensor ι) : Tensor ι := fun i => integerPowScalar y (x i)
+noncomputable def integerPow (y : ℤ) (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => integerPowScalar y (x i)
 
 /-- `mul(_const(x, c), x)`, the product with the rank-0 constant `c`.
 `broadcasting_shape_rule` ignores operands of rank 0, `jax/_src/lax/lax.py:4508`,
 so the result has the shape of `x`. -/
-noncomputable def constMul (c : Scalar) (x : Tensor ι) : Tensor ι := fun i => c * x i
+noncomputable def constMul (c : Scalar w) (x : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => c * x i
 
 /-- `div(_const(x, c), y)`, the quotient of the rank-0 constant `c` by `y`.
 `broadcasting_shape_rule` ignores operands of rank 0, `jax/_src/lax/lax.py:4508`,
 so the result has the shape of `y`. -/
-noncomputable def constDiv (c : Scalar) (y : Tensor ι) : Tensor ι := fun i => c / y i
+noncomputable def constDiv (c : Scalar w) (y : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => c / y i
 
 /-! ## Elementwise binary primitives -/
 
 /-- An elementwise binary primitive, which broadcasts its arguments against each other.
 Its entries are scalars, or booleans for a comparison.
 The proof `h` is the shape check of `broadcasting_shape_rule`, `jax/_src/lax/lax.py:4503`. -/
-def binop {α : Type} {sx sy : Shape n} (op : Scalar → Scalar → α) (h : Broadcastable sx sy)
-    (x : Tensor (Index sx)) (y : Tensor (Index sy)) : Index (broadcastShape sx sy) → α :=
+def binop {sx sy : Shape n} (op : Scalar w → Scalar w → d.Elem) (h : Broadcastable sx sy)
+    (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor d (Index (broadcastShape sx sy)) :=
   fun j => op (x (j.unbroadcast (broadcastsTo_left sx sy))) (y (j.unbroadcast h.right))
 
 variable {sx sy : Shape n}
 
 /-- `lax.mul`, elementwise product. `jax/_src/lax/lax.py:1275`; `out_dtype` is dropped -/
-noncomputable def mul (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def mul (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop (· * ·) h x y
 
 /-- `lax.div`, elementwise quotient. `jax/_src/lax/lax.py:1327` -/
-noncomputable def div (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def div (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop (· / ·) h x y
 
 /-- `lax.sub`, elementwise difference. `jax/_src/lax/lax.py:1251` -/
-noncomputable def sub (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def sub (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop (fun a b => a + -b) h x y
 
 /-- `lax.pow`, elementwise power `x ^ y` for a floating-point `y`. `jax/_src/lax/lax.py:942`.
 It lowers to [StableHLO `power`](https://openxla.org/stablehlo/spec#power),
 which is `pow` of IEEE 754 for floating-point arguments.
 Integer exponents are not modelled. -/
-noncomputable def pow (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def pow (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop Scalar.pow h x y
 
 /-- `lax.rem`, elementwise remainder with the sign of the dividend `x`. `jax/_src/lax/lax.py:1357`.
 It lowers to [StableHLO `remainder`](https://openxla.org/stablehlo/spec#remainder):
 `lhs - d * rhs`, where `d` is the quotient of IEEE 754 with the rounding `roundTowardZero`.
 Integer arguments are not modelled. -/
-noncomputable def rem (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def rem (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop Scalar.rem h x y
 
 /-- `lax.max`, elementwise maximum. `jax/_src/lax/lax.py:1385` -/
-noncomputable def max (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def max (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop Scalar.max h x y
 
 /-- An elementwise binary primitive whose first argument has rank 0.
@@ -170,7 +177,7 @@ def binopScalarRight {α β γ : Type} {sx : Shape n} {sy : Shape 0} (op : α �
 
 /-! ## Comparisons
 
-A comparison returns an array of booleans, `Index s → Bool`.
+A comparison returns an array of booleans, of dtype `bool`.
 For floating-point arguments, [StableHLO `compare`](https://openxla.org/stablehlo/spec#compare)
 with `compare_type = FLOAT` implements the quiet comparisons of IEEE 754:
 `ne` is true and the others are false if an argument is NaN.
@@ -179,44 +186,44 @@ The lowerings pass `total_order=False` to `_compare_lower_hlo`, as in `jax/_src/
 
 open scoped Classical in
 /-- `lax.eq`, elementwise `x == y`. `jax/_src/lax/lax.py:1517` -/
-noncomputable def eq (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Index (broadcastShape sx sy) → Bool :=
+noncomputable def eq (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   binop (fun a b => decide (a.eq b)) h x y
 
 open scoped Classical in
 /-- `lax.ne`, elementwise `x != y`. `jax/_src/lax/lax.py:1548` -/
-noncomputable def ne (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Index (broadcastShape sx sy) → Bool :=
+noncomputable def ne (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   binop (fun a b => decide (a.ne b)) h x y
 
 open scoped Classical in
 /-- `lax.ge`, elementwise `x >= y`. `jax/_src/lax/lax.py:1579` -/
-noncomputable def ge (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Index (broadcastShape sx sy) → Bool :=
+noncomputable def ge (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   binop (fun a b => decide (a.ge b)) h x y
 
 open scoped Classical in
 /-- `lax.gt`, elementwise `x > y`. `jax/_src/lax/lax.py:1610` -/
-noncomputable def gt (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Index (broadcastShape sx sy) → Bool :=
+noncomputable def gt (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   binop (fun a b => decide (a.gt b)) h x y
 
 open scoped Classical in
 /-- `lax.le`, elementwise `x <= y`. `jax/_src/lax/lax.py:1641` -/
-noncomputable def le (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Index (broadcastShape sx sy) → Bool :=
+noncomputable def le (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   binop (fun a b => decide (a.le b)) h x y
 
 open scoped Classical in
 /-- `lax.lt`, elementwise `x < y`. `jax/_src/lax/lax.py:1672` -/
-noncomputable def lt (h : Broadcastable sx sy) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Index (broadcastShape sx sy) → Bool :=
+noncomputable def lt (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   binop (fun a b => decide (a.lt b)) h x y
 
 /-- `lax.bitwise_and` on booleans, elementwise `x and y`. `jax/_src/lax/lax.py:1105`.
 It broadcasts its arguments like `binop`. -/
-def bitwiseAnd (h : Broadcastable sx sy) (x : Index sx → Bool) (y : Index sy → Bool) :
-    Index (broadcastShape sx sy) → Bool :=
+def bitwiseAnd (h : Broadcastable sx sy) (x : Tensor .bool (Index sx)) (y : Tensor .bool (Index sy)) :
+    Tensor .bool (Index (broadcastShape sx sy)) :=
   fun j => x (j.unbroadcast (broadcastsTo_left sx sy)) && y (j.unbroadcast h.right)
 
 /-! ## Selection -/
@@ -285,8 +292,8 @@ that the cases have the same shape, of the same rank, and that `which` is a scal
     msg = "select cases must have the same shapes, got [{}]."
 ``` -/
 def selectN {k n' : ℕ} {sw : Shape k} {s0 : Shape n} {s1 : Shape n'}
-    (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape sw s0) (which : Index sw → Bool)
-    (case0 : Tensor (Index s0)) (case1 : Tensor (Index s1)) : Tensor (Index s0) :=
+    (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape sw s0) (which : Tensor .bool (Index sw))
+    (case0 : Tensor d (Index s0)) (case1 : Tensor d (Index s1)) : Tensor d (Index s0) :=
   fun j => if which (Index.ofWhich hw j) then case1 (Index.castShape hc j) else case0 j
 
 /-- `lax.clamp(min, x, max)`, which clamps `x` between `lo = min` and `hi = max`.
@@ -303,8 +310,8 @@ that the bounds are scalars or have the shape of `x`, which `WhichShape` states:
     raise TypeError(...)
 ``` -/
 noncomputable def clamp {k k' : ℕ} {sl : Shape k} {sh : Shape k'} {s : Shape n}
-    (hl : WhichShape sl s) (hh : WhichShape sh s) (lo : Tensor (Index sl)) (x : Tensor (Index s))
-    (hi : Tensor (Index sh)) : Tensor (Index s) :=
+    (hl : WhichShape sl s) (hh : WhichShape sh s) (lo : Tensor (.float w) (Index sl)) (x : Tensor (.float w) (Index s))
+    (hi : Tensor (.float w) (Index sh)) : Tensor (.float w) (Index s) :=
   fun j => ((x j).max (lo (Index.ofWhich hl j))).min (hi (Index.ofWhich hh j))
 
 /-- `lax.reshape` without `dimensions`: the entries of the operand in row-major order,
@@ -313,7 +320,7 @@ laid out in the shape `newSizes`.
 The proof `h` is the constraint of [StableHLO `reshape`](https://openxla.org/stablehlo/spec#reshape)
 that the sizes agree. `_reshape_shape_rule`, `jax/_src/lax/lax.py:8360`, does not check it. -/
 def reshape {s : Shape m} (newSizes : Shape n) (h : ∏ d, s d = ∏ d, newSizes d)
-    (operand : Tensor (Index s)) : Tensor (Index newSizes) :=
+    (operand : Tensor d (Index s)) : Tensor d (Index newSizes) :=
   fun j => operand (Index.rowMajor.symm (Fin.cast h.symm (Index.rowMajor j)))
 
 /-! ## Polynomials -/
@@ -328,7 +335,7 @@ def reshape {s : Shape m} (newSizes : Shape n) (h : ∏ d, s d = ∏ d, newSizes
       acc = add(mul(acc, x), c)
     return acc
 ``` -/
-noncomputable def horner (x : Scalar) : {K : ℕ} → (Fin (K + 1) → Scalar) → Scalar
+noncomputable def horner (x : Scalar w) : {K : ℕ} → (Fin (K + 1) → Scalar w) → Scalar w
   | 0, a => a 0
   | _ + 1, a => horner x (Fin.tail a) * x + a 0
 
@@ -347,9 +354,9 @@ The proof `h` is the shape check of `broadcasting_shape_rule`, `jax/_src/lax/lax
   return polynomial_p.bind(x, *c_args, **kwargs)
 ``` -/
 noncomputable def polynomial {K : ℕ} {sx : Shape n} {sc : Fin (K + 1) → Shape n}
-    (h : BroadcastableAll (sx :: List.ofFn sc)) (x : Tensor (Index sx))
-    (coeffs : (k : Fin (K + 1)) → Tensor (Index (sc k))) :
-    Tensor (Index (broadcastShapes (sx :: List.ofFn sc))) :=
+    (h : BroadcastableAll (sx :: List.ofFn sc)) (x : Tensor (.float w) (Index sx))
+    (coeffs : (k : Fin (K + 1)) → Tensor (.float w) (Index (sc k))) :
+    Tensor (.float w) (Index (broadcastShapes (sx :: List.ofFn sc))) :=
   fun j => horner (x (j.unbroadcast (broadcastsTo_broadcastShapes h List.mem_cons_self)))
     fun k => coeffs k (j.unbroadcast (broadcastsTo_broadcastShapes h
       (List.mem_cons_of_mem _ (List.mem_ofFn.2 ⟨k, rfl⟩))))
@@ -364,8 +371,8 @@ and that `broadcast_dimensions` has no duplicates, `jax/_src/lax/lax.py:7485`.
 The semantics do not need `hd`. -/
 def broadcastInDim {so : Shape m} (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions))
-    (_hd : Function.Injective broadcastDimensions) (operand : Tensor (Index so)) :
-    Tensor (Index shape) :=
+    (_hd : Function.Injective broadcastDimensions) (operand : Tensor d (Index so)) :
+    Tensor d (Index shape) :=
   fun j => operand ((j.proj broadcastDimensions).unbroadcast h)
 
 /-- `lax.transpose`, which permutes the axes: axis `d` of the result is axis `permutation d` of the operand.
@@ -378,15 +385,15 @@ that `permutation` is a permutation of the axes:
   if tuple(sorted(permutation)) != tuple(range(operand.ndim)):
 ``` -/
 noncomputable def transpose {s : Shape n} (permutation : Fin n → Fin n)
-    (h : Function.Injective permutation) (operand : Tensor (Index s)) :
-    Tensor (Index (s ∘ permutation)) :=
+    (h : Function.Injective permutation) (operand : Tensor d (Index s)) :
+    Tensor d (Index (s ∘ permutation)) :=
   let e := Equiv.ofBijective permutation (Finite.injective_iff_bijective.1 h)
   fun j => operand fun d => Fin.cast (congrArg s (e.apply_symm_apply d)) (j (e.symm d))
 
 /-- `lax.reduce_sum`, the sum over `axes`. The result keeps the other axes in order.
 `jax/_src/lax/lax.py:3412`; `out_sharding` is dropped -/
-def reduceSum {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (Index s)) :
-    Tensor (Index (s ∘ keptAxes axes)) :=
+def reduceSum {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (s ∘ keptAxes axes)) :=
   fun j => ∑ i with i.proj (keptAxes axes) = j, operand i
 
 /-- `lax.reduce_max`, the maximum over `axes`. The result keeps the other axes in order.
@@ -401,13 +408,13 @@ mlir.register_lowering(reduce_max_p, partial(_unary_reduce_lower, mlir.max_hlo,
 So the maximum over an empty axis is `-∞`, and over an axis with a NaN it is NaN.
 `maximum` is associative and commutative (`Scalar.max`), so the order of the reduction does not matter.
 Duplicate and out-of-bounds axes, which `_reduce_op_shape_rule` rejects, are not representable. -/
-def reduceMax {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (Index s)) :
-    Tensor (Index (s ∘ keptAxes axes)) :=
+def reduceMax {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (s ∘ keptAxes axes)) :=
   fun j => ({i | i.proj (keptAxes axes) = j} : Finset (Index s)).fold Scalar.max .negInf operand
 
 /-- `lax.convert_element_type` from `bool` to a floating-point dtype: `1` for true and `0` for false.
 `jax/_src/lax/lax.py:1713`. It lowers to [StableHLO `convert`](https://openxla.org/stablehlo/spec#convert). -/
-def convertBool {ι : Type} (x : ι → Bool) : Tensor ι := fun i => if x i then 1 else 0
+def convertBool {ι : Type} (x : Tensor .bool ι) : Tensor (.float w) ι := fun i => if x i then 1 else 0
 
 /-- `lax.cumsum`, the cumulative sum along `axis`:
 entry `j` is the sum of the entries at or before `j` on `axis`, and at or after `j` if `reverse`.
@@ -415,8 +422,8 @@ entry `j` is the sum of the entries at or before `j` on `axis`, and at or after 
 It lowers to a `reduce_window` sum over the window that ends at `j`, or starts at `j` if `reverse`
 (`cumred_reduce_window_impl`, `jax/_src/lax/control_flow/loops.py:3200`).
 Negative and out-of-bounds axes, which `_cumred_shape_rule` rejects, are not representable. -/
-def cumsum {s : Shape n} (axis : Fin n) (reverse : Bool) (operand : Tensor (Index s)) :
-    Tensor (Index s) :=
+def cumsum {s : Shape n} (axis : Fin n) (reverse : Bool) (operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index s) :=
   fun j => ∑ i with (∀ d, d ≠ axis → i d = j d) ∧
     (if reverse then j axis ≤ i axis else i axis ≤ j axis), operand i
 
@@ -458,8 +465,8 @@ that no axis of the result has a negative size.
 Negative interior padding, which `_pad_shape_rule` rejects, is not representable. -/
 noncomputable def pad {s : Shape n} {sv : Shape 0} (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (_h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (operand : Tensor (Index s)) (paddingValue : Tensor (Index sv)) :
-    Tensor (Index (padShape s lo hi interior)) :=
+    (operand : Tensor d (Index s)) (paddingValue : Tensor d (Index sv)) :
+    Tensor d (Index (padShape s lo hi interior)) :=
   fun j => if h : ∃ i : Index s, ∀ d, ((j d : ℕ) : ℤ) = lo d + (i d : ℕ) * ((interior d : ℤ) + 1)
     then operand h.choose else paddingValue fun d => d.elim0
 
@@ -509,19 +516,19 @@ and no stride is zero, for which `stride_dim` raises `ZeroDivisionError`.
 Negative indices and strides, which `_slice_shape_rule` rejects, are not representable. -/
 def slice {s : Shape n} (startIndices limitIndices strides : Fin n → ℕ)
     (hl : ∀ d, limitIndices d ≤ s d) (_hs : ∀ d, startIndices d ≤ limitIndices d)
-    (hst : ∀ d, 0 < strides d) (operand : Tensor (Index s)) :
-    Tensor (Index (sliceShape startIndices limitIndices strides)) :=
+    (hst : ∀ d, 0 < strides d) (operand : Tensor d (Index s)) :
+    Tensor d (Index (sliceShape startIndices limitIndices strides)) :=
   fun j => operand fun d =>
     ⟨startIndices d + j d * strides d, slice_index_lt (hl d) (hst d) (j d).isLt⟩
 
 /-! ## Reductions -/
 
 /-- The `computation` of `lax.reduce` with one operand, traced to the jaxpr `jaxpr` of `reduce_p`. -/
-structure Computation where
+structure Computation (w : FloatWidth) where
   /-- The function of two scalars that the jaxpr computes. -/
-  op : Scalar → Scalar → Scalar
+  op : Scalar w → Scalar w → Scalar w
   /-- The JVP `jvp x y dx dy` of `op` that `api.jvp` derives from the jaxpr. -/
-  jvp : Scalar → Scalar → Scalar → Scalar → Scalar
+  jvp : Scalar w → Scalar w → Scalar w → Scalar w → Scalar w
 
 /-- `op` is associative with the two-sided identity `e`:
 the condition of the `lax.reduce` docstring that `computation` and `init_values` form a monoid. -/
@@ -533,7 +540,7 @@ structure IsMonoidOp {α : Type} (op : α → α → α) (e : α) : Prop where
 /-- The JVP of `computation` is correct at the finite pair `(a, b)`:
 near `(a, b)`, `op` computes a real function `F`, which is differentiable at `(a, b)`,
 and `jvp` applies its derivative to finite tangents. -/
-def Computation.IsJvpAt (computation : Computation) (a b : ℝ) : Prop :=
+def Computation.IsJvpAt (computation : Computation w) (a b : ℝ) : Prop :=
   ∃ (F : ℝ × ℝ → ℝ) (L : ℝ × ℝ →L[ℝ] ℝ),
     (∀ᶠ p in nhds (a, b), computation.op (.fin p.1) (.fin p.2) = .fin (F p)) ∧
     HasFDerivAt F L (a, b) ∧
@@ -556,7 +563,7 @@ theorem nodup_sortedAxes (D : Finset (Fin n)) : (sortedAxes D).Nodup :=
 /-- The entries of `x` along the axes `ax` at the position `j` of the other axes,
 in row-major order of the axes `ax`, in the order in which `ax` lists them. -/
 def reductionSlice {s : Shape n} {D : Finset (Fin n)} (ax : List (Fin n)) (hax : ∀ d, d ∈ ax ↔ d ∈ D)
-    (x : Tensor (Index s)) (j : Index (s ∘ keptAxes D)) : Fin (∏ k, (s ∘ ax.get) k) → Scalar :=
+    (x : Tensor (.float w) (Index s)) (j : Index (s ∘ keptAxes D)) : Fin (∏ k, (s ∘ ax.get) k) → Scalar w :=
   fun p => x (Index.merge ax hax (Index.rowMajor.symm p) j)
 
 /-- `lax.reduce` with one operand and one initial value, which reduces the operand over `dimensions`
@@ -573,15 +580,15 @@ The `lax.reduce` docstring requires that `computation` and `init_values` form a 
 then every such tree gives the left fold.
 The proof `_hd` is constraint (C5) of StableHLO `reduce`, `is_unique(dimensions)`;
 `_reduce_shape_rule`, `jax/_src/lax/lax.py:9055`, does not check it. -/
-def reduce {s : Shape n} (computation : Computation) (initValue : Scalar) (dimensions : List (Fin n))
-    (_hd : dimensions.Nodup) (operand : Tensor (Index s)) :
-    Tensor (Index (s ∘ keptAxes dimensions.toFinset)) :=
+def reduce {s : Shape n} (computation : Computation w) (initValue : Scalar w) (dimensions : List (Fin n))
+    (_hd : dimensions.Nodup) (operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (s ∘ keptAxes dimensions.toFinset)) :=
   fun j => (List.ofFn (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) operand j)).foldl
     computation.op initValue
 
 /-! ## Gather and scatter
 
-An array of indices of shape `s` is a function `Index s → ℤ`, with no tangent.
+An array of indices of shape `s` is an integer array `Tensor (.int wi) (Index s)`, with no tangent.
 Dimension numbers are lists of natural numbers, as in JAX. Negative dimensions, which the shape rules reject,
 are not representable.
 `unique_indices` and `indices_are_sorted` are dropped: they are promises that let XLA pick a faster implementation,
@@ -811,11 +818,11 @@ that did not lie inside the operand by `fill_value`, `jax/_src/lax/slicing.py:21
 In the other modes it is `None`, and the clamped windows lie inside the operand.
 The proof `_h` is the shape check of `_gather_shape_rule`, and `_hl` the constraints of XLA. -/
 def gather {so : Shape n} {si : Shape ni} (dimensionNumbers : GatherDimensionNumbers)
-    (sliceSizes : List ℕ) (mode : GatherScatterMode) (fillValue : Scalar)
+    (sliceSizes : List ℕ) (mode : GatherScatterMode) (fillValue : Scalar w)
     (_h : GatherValid so si dimensionNumbers sliceSizes)
     (_hl : GatherLowers so si dimensionNumbers sliceSizes)
-    (operand : Tensor (Index so)) (startIndices : Index si → ℤ) :
-    Tensor (Index (gatherShape si dimensionNumbers sliceSizes)) :=
+    (operand : Tensor (.float w) (Index so)) (startIndices : Tensor (.int wi) (Index si)) :
+    Tensor (.float w) (Index (gatherShape si dimensionNumbers sliceSizes)) :=
   fun j =>
     match gatherIndex so si dimensionNumbers sliceSizes (mode != .fillOrDrop) startIndices j.val with
     | some i => operand i
@@ -905,8 +912,8 @@ The model follows StableHLO there. -/
 def scatterAdd {so : Shape n} {si : Shape ni} {su : Shape nu}
     (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
     (_h : ScatterValid so si su dimensionNumbers)
-    (operand : Tensor (Index so)) (scatterIndices : Index si → ℤ) (updates : Tensor (Index su)) :
-    Tensor (Index so) :=
+    (operand : Tensor (.float w) (Index so)) (scatterIndices : Tensor (.int wi) (Index si)) (updates : Tensor (.float w) (Index su)) :
+    Tensor (.float w) (Index so) :=
   fun k => operand k + ∑ u with gatherIndex so si dimensionNumbers.toGather
     (scatterSliceSizes n su dimensionNumbers) (mode == .clip) scatterIndices u.val = some k, updates u
 
@@ -917,8 +924,8 @@ It lowers to [StableHLO `scatter`](https://openxla.org/stablehlo/spec#scatter) w
 def scatterSub {so : Shape n} {si : Shape ni} {su : Shape nu}
     (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
     (_h : ScatterValid so si su dimensionNumbers)
-    (operand : Tensor (Index so)) (scatterIndices : Index si → ℤ) (updates : Tensor (Index su)) :
-    Tensor (Index so) :=
+    (operand : Tensor (.float w) (Index so)) (scatterIndices : Tensor (.int wi) (Index si)) (updates : Tensor (.float w) (Index su)) :
+    Tensor (.float w) (Index so) :=
   fun k => operand k + ∑ u with gatherIndex so si dimensionNumbers.toGather
     (scatterSliceSizes n su dimensionNumbers) (mode == .clip) scatterIndices u.val = some k, -updates u
 
@@ -983,8 +990,8 @@ def expand_dims(array: ArrayLike, dimensions: Sequence[int]) -> Array:
   return broadcast_in_dim(array, result_shape, broadcast_dims)
 ``` -/
 def expandDims {k : ℕ} {s : Shape k} (dimensions : Finset ℕ)
-    (h : ∀ i ∈ dimensions, i < k + dimensions.card) (array : Tensor (Index s)) :
-    Tensor (Index (expandDimsShape s (dimsSet _ dimensions) (card_compl_dimsSet h))) :=
+    (h : ∀ i ∈ dimensions, i < k + dimensions.card) (array : Tensor d (Index s)) :
+    Tensor d (Index (expandDimsShape s (dimsSet _ dimensions) (card_compl_dimsSet h))) :=
   broadcastInDim _ (keptAxes (dimsSet _ dimensions) ∘ Fin.cast (card_compl_dimsSet h).symm)
     (expandDimsShape_broadcastsTo _ _ _) ((keptAxes_injective _).comp (Fin.cast_injective _)) array
 
@@ -992,12 +999,12 @@ open scoped Classical in
 /-- `_replace_zero`, which replaces the zeros of `x` by ones.
 The rank-0 constant broadcasts to the shape of `x`, so the result has the shape of `x`.
 `jax/_src/lax/lax.py:5431`: `_replace_zero = lambda x: select(eq(x, _const(x, 0)), _ones(x), x)` -/
-noncomputable def replaceZero (x : Tensor ι) : Tensor ι :=
+noncomputable def replaceZero (x : Tensor (.float w) ι) : Tensor (.float w) ι :=
   fun i => if (x i).eq 0 then 1 else x i
 
 open scoped Classical in
 /-- One entry of `_balanced_cmp`: `1` if `a > b`, `1/2` if `a == b`, `0` otherwise. -/
-noncomputable def balancedCmpScalar (a b : Scalar) : Scalar :=
+noncomputable def balancedCmpScalar (a b : Scalar w) : Scalar w :=
   if a.gt b then 1 else if a.eq b then .fin (1 / 2) else 0
 
 /-- Helper of the JVP rules of `max` and `min`.
@@ -1013,8 +1020,8 @@ def _balanced_cmp(x, y):
   half = full_like(gt_mask, 0.5, dtype=x.dtype)
   return select(gt_mask, ones, select(eq_mask, half, zeros))
 ``` -/
-noncomputable def balancedCmp (h : Broadcastable sx sy) (x : Tensor (Index sx))
-    (y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def balancedCmp (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx))
+    (y : Tensor (.float w) (Index sy)) : Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop balancedCmpScalar h x y
 
 theorem prod_unbroadcast {sa sx : Shape n} (h : BroadcastsTo sa sx) :
@@ -1056,8 +1063,8 @@ def _unbroadcast(aval, x):
     x = reduce_sum(x, dims) if dims else x
     return reshape(x, aval.shape, out_sharding=aval.sharding)
 ``` -/
-def unbroadcast {sx : Shape n} (sa : Shape n) (h : BroadcastsTo sa sx) (x : Tensor (Index sx)) :
-    Tensor (Index sa) :=
+def unbroadcast {sx : Shape n} (sa : Shape n) (h : BroadcastsTo sa sx) (x : Tensor (.float w) (Index sx)) :
+    Tensor (.float w) (Index sa) :=
   reshape sa (prod_unbroadcast h) (reduceSum {d | sx d ≠ sa d} x)
 
 theorem prod_maybeBroadcast {sx target : Shape n} (h : BroadcastsTo sx target) :
@@ -1098,8 +1105,8 @@ def _maybe_broadcast(target_shape, x, target_sharding):
                             out_sharding=target_sharding)
 ``` -/
 def maybeBroadcast {sx : Shape n} (target : Shape n)
-    (h : ∏ d, sx d = ∏ a, (sx ∘ keptAxes {d | sx d ≠ target d}) a) (x : Tensor (Index sx)) :
-    Tensor (Index target) :=
+    (h : ∏ d, sx d = ∏ a, (sx ∘ keptAxes {d | sx d ≠ target d}) a) (x : Tensor d (Index sx)) :
+    Tensor d (Index target) :=
   broadcastInDim target (keptAxes {d | sx d ≠ target d})
     (maybeBroadcast_broadcastsTo sx target) (keptAxes_injective _)
     (reshape (sx ∘ keptAxes {d | sx d ≠ target d}) h x)
@@ -1108,7 +1115,7 @@ def maybeBroadcast {sx : Shape n} (target : Shape n)
 
 /-- `_maybe_broadcast` reads the entry of `x` that is broadcast to `j`. -/
 theorem maybeBroadcast_apply {sx target : Shape n} (h : BroadcastsTo sx target)
-    (x : Tensor (Index sx)) (j : Index target) :
+    (x : Tensor (.float w) (Index sx)) (j : Index target) :
     maybeBroadcast target (prod_maybeBroadcast h) x j = x (j.unbroadcast h) := by
   let D : Finset (Fin n) := {d | sx d ≠ target d}
   simp only [maybeBroadcast, broadcastInDim, reshape]
@@ -1128,15 +1135,15 @@ theorem maybeBroadcast_apply {sx target : Shape n} (h : BroadcastsTo sx target)
     omega
 
 /-- A binary primitive on arrays of equal shape acts entry by entry. -/
-theorem binop_refl_same {s : Shape n} (op : Scalar → Scalar → Scalar) (x y : Tensor (Index s))
-    {c : Tensor (Index s)} (hc : ∀ i, op (x i) (y i) = c i) :
-    Tensor.Same (binop op (Broadcastable.refl s) x y) c :=
+theorem binop_refl_same {s : Shape n} (op : Scalar w → Scalar w → Scalar w) (x y : Tensor (.float w) (Index s))
+    {c : Tensor (.float w) (Index s)} (hc : ∀ i, op (x i) (y i) = c i) :
+    Tensor.Same (binop (d := .float w) op (Broadcastable.refl s) x y) c :=
   Tensor.same_of_shape_eq (fun d => by simp [broadcastShape]) fun i j hij => by
     rw [← hc j, binop, Index.unbroadcast_eq_of_val _ i j hij]
 
 /-- The loop of `_integer_pow` on finite values multiplies `acc` by `x ^ y`. -/
 theorem integerPowLoop_fin (x : ℝ) (y : ℕ) : ∀ acc : Option ℝ, (acc.isSome ∨ 0 < y) →
-    integerPowLoop (acc.map .fin) (.fin x) y = some (.fin (acc.getD 1 * x ^ y)) := by
+    integerPowLoop (acc.map .fin) (.fin x : Scalar w) y = some (.fin (acc.getD 1 * x ^ y)) := by
   induction y using Nat.strong_induction_on generalizing x with
   | _ y ih =>
   intro acc hacc
@@ -1148,11 +1155,11 @@ theorem integerPowLoop_fin (x : ℝ) (y : ℕ) : ∀ acc : Option ℝ, (acc.isSo
   have key := ih (y / 2) (by omega) (if y / 2 > 0 then x * x else x)
     (if y % 2 = 1 then some (acc.getD 1 * x) else acc)
     (by split_ifs <;> simp_all; omega)
-  have hacc' : (if y % 2 = 1 then some (match acc.map Scalar.fin with
+  have hacc' : (if y % 2 = 1 then some (match acc.map (Scalar.fin (w := w)) with
       | none => Scalar.fin x | some a => a * Scalar.fin x) else acc.map .fin) =
       (if y % 2 = 1 then some (acc.getD 1 * x) else acc).map .fin := by
     cases acc <;> split_ifs <;> simp
-  have hx : (if y / 2 > 0 then Scalar.fin x * .fin x else .fin x) =
+  have hx : (if y / 2 > 0 then (Scalar.fin x : Scalar w) * .fin x else .fin x) =
       .fin (if y / 2 > 0 then x * x else x) := by
     split_ifs <;> rfl
   rw [hacc', hx, key]
@@ -1173,8 +1180,8 @@ theorem integerPowLoop_fin (x : ℝ) (y : ℕ) : ∀ acc : Option ℝ, (acc.isSo
 
 /-- `integer_pow` of a finite value is finite where the power is defined. -/
 theorem integerPowScalar_fin (y : ℤ) (x : ℝ) (h : 0 ≤ y ∨ x ≠ 0) :
-    integerPowScalar y (.fin x) = .fin (x ^ y) := by
-  have hloop := integerPowLoop_fin x y.natAbs none
+    integerPowScalar y (.fin x : Scalar w) = .fin (x ^ y) := by
+  have hloop := integerPowLoop_fin (w := w) x y.natAbs none
   simp only [Option.map_none, Option.isSome_none, Bool.false_eq_true, false_or,
     Option.getD_none, one_mul] at hloop
   unfold integerPowScalar
@@ -1191,7 +1198,7 @@ theorem integerPowScalar_fin (y : ℤ) (x : ℝ) (h : 0 ≤ y ∨ x ≠ 0) :
       Int.natAbs_natCast]
 
 /-- `_unbroadcast` sums `x` over the indices that are broadcast from `i`. -/
-theorem unbroadcast_apply {sa sx : Shape n} (h : BroadcastsTo sa sx) (x : Tensor (Index sx))
+theorem unbroadcast_apply {sa sx : Shape n} (h : BroadcastsTo sa sx) (x : Tensor (.float w) (Index sx))
     (i : Index sa) : unbroadcast sa h x i = ∑ j with j.unbroadcast h = i, x j := by
   let D : Finset (Fin n) := {d | sx d ≠ sa d}
   have hkept : ∀ a, sx (keptAxes D a) = sa (keptAxes D a) := fun a => by

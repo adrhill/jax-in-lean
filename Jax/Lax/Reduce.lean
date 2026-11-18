@@ -15,7 +15,7 @@ which the `lax.reduce` docstring allows.
 
 namespace Jax.Lax
 
-variable {n : ℕ}
+variable {n : ℕ} {w : FloatWidth}
 
 /-- `_reduce_tree` on `n` values: while more than one value is left,
 combine the first half with the second half, padded with `initValue` to the same length.
@@ -88,9 +88,9 @@ def _reduce_jvp_rule(primals, tangents, *, computation, jaxpr, dimensions):
   reducer = core.jaxpr_as_fun(jaxpr)
   return _reduce_jvp(reducer, init_values, primal_xs, tangent_xs, dimensions)
 ``` -/
-def reduceJvp {s : Shape n} (computation : Computation) (initValue : Scalar)
-    (dimensions : List (Fin n)) (_hd : dimensions.Nodup) (operandDot operand : Tensor (Index s)) :
-    Tensor (Index (s ∘ keptAxes dimensions.toFinset)) :=
+def reduceJvp {s : Shape n} (computation : Computation w) (initValue : Scalar w)
+    (dimensions : List (Fin n)) (_hd : dimensions.Nodup) (operandDot operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (s ∘ keptAxes dimensions.toFinset)) :=
   fun j => (reduceTree (fun a b => (computation.op a.1 b.1, computation.jvp a.1 b.1 a.2 b.2))
     (initValue, 0) _ fun p =>
       (reductionSlice dimensions (fun _ => List.mem_toFinset.symm) operand j p,
@@ -239,12 +239,12 @@ variable {E : Type} [NormedAddCommGroup E] [NormedSpace ℝ E]
 
 /-- Near `x`, `φ` computes a real function that is differentiable at `x`,
 and `t` is its derivative applied to `g`. -/
-private def HasJvpAt (φ : E → Scalar) (x g : E) (t : Scalar) : Prop :=
+private def HasJvpAt (φ : E → Scalar w) (x g : E) (t : Scalar w) : Prop :=
   ∃ (Φ : E → ℝ) (Φ' : E →L[ℝ] ℝ), (∀ᶠ y in nhds x, φ y = .fin (Φ y)) ∧ HasFDerivAt Φ Φ' x ∧
     t = .fin (Φ' g)
 
 /-- The chain rule for a computation whose JVP is correct at the values of its arguments. -/
-private theorem HasJvpAt.op {c : Computation} {φ₁ φ₂ : E → Scalar} {x g : E} {t₁ t₂ : Scalar}
+private theorem HasJvpAt.op {c : Computation w} {φ₁ φ₂ : E → Scalar w} {x g : E} {t₁ t₂ : Scalar w}
     (h₁ : HasJvpAt φ₁ x g t₁) (h₂ : HasJvpAt φ₂ x g t₂) {a b : ℝ} (ha : φ₁ x = .fin a)
     (hb : φ₂ x = .fin b) (hc : c.IsJvpAt a b) :
     HasJvpAt (fun y => c.op (φ₁ y) (φ₂ y)) x g (c.jvp (φ₁ x) (φ₂ x) t₁ t₂) := by
@@ -267,9 +267,9 @@ private theorem HasJvpAt.op {c : Computation} {φ₁ φ₂ : E → Scalar} {x g 
     rfl
 
 /-- Combining with the identity in the second argument, with the tangent `0`. -/
-private theorem HasJvpAt.pad {c : Computation} {init : Scalar} (hright : ∀ a, c.op a init = a)
-    (hpad : ∀ a da : ℝ, c.jvp (.fin a) init (.fin da) 0 = .fin da) {φ : E → Scalar} {x g : E}
-    {t : Scalar} (h : HasJvpAt φ x g t) :
+private theorem HasJvpAt.pad {c : Computation w} {init : Scalar w} (hright : ∀ a, c.op a init = a)
+    (hpad : ∀ a da : ℝ, c.jvp (.fin a) init (.fin da) 0 = .fin da) {φ : E → Scalar w} {x g : E}
+    {t : Scalar w} (h : HasJvpAt φ x g t) :
     HasJvpAt (fun y => c.op (φ y) init) x g (c.jvp (φ x) init t 0) := by
   obtain ⟨Φ, Φ', hev, hd, rfl⟩ := h
   refine ⟨Φ, Φ', ?_, hd, ?_⟩
@@ -281,14 +281,14 @@ end Derivative
 /-- The arrays at which the JVP of `computation` is correct at every pair of reductions
 of two disjoint, nonempty sets of entries of the same slice.
 These are the pairs that an evaluation tree of a commutative reduction may combine. -/
-def reduceJvpDomain {s : Shape n} (computation : Computation) (initValue : Scalar)
+def reduceJvpDomain {s : Shape n} (computation : Computation w) (initValue : Scalar w)
     (dimensions : List (Fin n)) : Set (Index s → ℝ) :=
   {x | ∀ (j : Index (s ∘ keptAxes dimensions.toFinset)) A B, Disjoint A B → A.Nonempty →
     B.Nonempty → ∃ a b,
       reduceOn computation.op initValue
-        (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal x) j) A = .fin a ∧
+        (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal (w := w) x) j) A = .fin a ∧
       reduceOn computation.op initValue
-        (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal x) j) B = .fin b ∧
+        (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal (w := w) x) j) B = .fin b ∧
       computation.IsJvpAt a b}
 
 /-- The JVP rule of `reduce` is correct for a commutative monoid,
@@ -297,22 +297,23 @@ Besides the monoid conditions of the `lax.reduce` docstring and commutativity, i
 that the JVP of the computation passes the tangent through the identity in the second argument,
 where `_reduce_tree` pads, and that the initial value is finite if a reduced axis is empty.
 `reduceJvp_not_correct` shows that commutativity cannot be dropped. -/
-theorem reduceJvp_correct {s : Shape n} (computation : Computation) (initValue : Scalar)
+theorem reduceJvp_correct {s : Shape n} (computation : Computation w) (initValue : Scalar w)
     (dimensions : List (Fin n)) (hd : dimensions.Nodup)
     (hmon : IsMonoidOp computation.op initValue)
     (hcomm : ∀ a b, computation.op a b = computation.op b a)
     (hpad : ∀ a da : ℝ, computation.jvp (.fin a) initValue (.fin da) 0 = .fin da)
     (hinit : (∃ c : ℝ, initValue = .fin c) ∨ ∀ d ∈ dimensions, s d ≠ 0) :
     IsJvpOfOn (reduceJvp (s := s) computation initValue dimensions hd)
-      (reduce computation initValue dimensions hd) (reduceJvpDomain computation initValue dimensions) := by
+      (reduce (w := w) computation initValue dimensions hd)
+      (reduceJvpDomain (w := w) computation initValue dimensions) := by
   refine isJvpOfOn_of_apply fun x hx g j => ?_
   rw [reduceJvpDomain, Set.mem_ofPred_eq] at hx
   let K := ∏ k, (s ∘ dimensions.get) k
   -- The slice in the order of `dimensions`, and in increasing order of the axes.
-  let slice₁ : (Index s → ℝ) → Fin K → Scalar :=
-    fun y => reductionSlice dimensions (fun _ => List.mem_toFinset.symm) (ofReal y) j
-  let slice₂ : (Index s → ℝ) → Fin (∏ k, (s ∘ (sortedAxes dimensions.toFinset).get) k) → Scalar :=
-    fun y => reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal y) j
+  let slice₁ : (Index s → ℝ) → Fin K → Scalar w :=
+    fun y => reductionSlice dimensions (fun _ => List.mem_toFinset.symm) (ofReal (w := w) y) j
+  let slice₂ : (Index s → ℝ) → Fin (∏ k, (s ∘ (sortedAxes dimensions.toFinset).get) k) → Scalar w :=
+    fun y => reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal (w := w) y) j
   let σ : Fin K ≃ Fin (∏ k, (s ∘ (sortedAxes dimensions.toFinset).get) k) :=
     Index.rowMajor.symm.trans ((Index.reorderEquiv hd (nodup_sortedAxes _)
       fun d => by rw [mem_sortedAxes, List.mem_toFinset]).trans Index.rowMajor)
@@ -320,7 +321,7 @@ theorem reduceJvp_correct {s : Shape n} (computation : Computation) (initValue :
     simp only [slice₁, slice₂, reductionSlice, σ, Function.comp_apply, Equiv.trans_apply,
       Equiv.symm_apply_apply, Index.reorderEquiv, Equiv.coe_fn_mk]
     rw [Index.merge_reorder]
-  have hprimal : ∀ y, reduce computation initValue dimensions hd (ofReal y) j =
+  have hprimal : ∀ y, reduce (w := w) computation initValue dimensions hd (ofReal y) j =
       (List.ofFn (slice₁ y)).foldl computation.op initValue := fun y => by
     rw [hσ, hmon.foldl_ofFn_equiv hcomm]
     rfl
@@ -335,12 +336,12 @@ theorem reduceJvp_correct {s : Shape n} (computation : Computation) (initValue :
       rw [reduceTree_congr _ _ hK, reduceTree.eq_1]
       simp [Scalar.zero_def]
   -- Run `_reduce_tree` on functions of the array, tangents and the sets of positions they reduce.
-  let T := ((Index s → ℝ) → Scalar) × Scalar × Finset (Fin K)
+  let T := ((Index s → ℝ) → Scalar w) × Scalar w × Finset (Fin K)
   let r : T → T → T := fun a b => (fun y => computation.op (a.1 y) (b.1 y),
     computation.jvp (a.1 x) (b.1 x) a.2.1 b.2.1, a.2.2 ∪ b.2.2)
   let i₀ : T := (fun _ => initValue, 0, ∅)
   let leaf : Fin K → T := fun p =>
-    (fun y => slice₁ y p, reductionSlice dimensions (fun _ => List.mem_toFinset.symm) (ofReal g) j p,
+    (fun y => slice₁ y p, reductionSlice dimensions (fun _ => List.mem_toFinset.symm) (ofReal (w := w) g) j p,
       {p})
   let P : T → Prop := fun a => a.2.2.Nonempty ∧
     (∀ y, a.1 y = reduceOn computation.op initValue (slice₁ y) a.2.2) ∧ HasJvpAt a.1 x g a.2.1
@@ -398,34 +399,35 @@ def _select_jvp(primals, tangents):
   return out, out_dot
 ```
 The comparison `eq` has no tangent. -/
-noncomputable def lastNotOne : Computation where
+noncomputable def lastNotOne : Computation w where
   op x y := if y.eq 1 then x else y
   jvp _ y dx dy := if y.eq 1 then dx else dy
 
 /-- `lastNotOne` is associative. -/
-theorem lastNotOne_assoc (x y z : Scalar) :
+theorem lastNotOne_assoc (x y z : Scalar w) :
     lastNotOne.op (lastNotOne.op x y) z = lastNotOne.op x (lastNotOne.op y z) := by
   simp only [lastNotOne]
   split_ifs <;> simp_all
 
 /-- `1` is a left identity of `lastNotOne`. -/
-theorem lastNotOne_one_left (x : Scalar) : lastNotOne.op 1 x = x := by
+theorem lastNotOne_one_left (x : Scalar w) : lastNotOne.op 1 x = x := by
   simp only [lastNotOne]
   split_ifs with h
   exacts [h.1.symm, rfl]
 
 /-- `1` is a right identity of `lastNotOne`. -/
-theorem lastNotOne_one_right (x : Scalar) : lastNotOne.op x 1 = x := by
+theorem lastNotOne_one_right (x : Scalar w) : lastNotOne.op x 1 = x := by
   simp [lastNotOne, Scalar.eq, Scalar.one_def]
 
 /-- `lastNotOne` is not commutative. -/
-theorem lastNotOne_not_comm : lastNotOne.op (.fin 2) (.fin 3) ≠ lastNotOne.op (.fin 3) (.fin 2) := by
+theorem lastNotOne_not_comm :
+    (lastNotOne (w := w)).op (.fin 2) (.fin 3) ≠ lastNotOne.op (.fin 3) (.fin 2) := by
   simp only [lastNotOne, Scalar.one_def, Scalar.eq_fin]
   norm_num
 
 /-- The JVP of `lastNotOne` is correct where its second argument is not `1`:
 near `(x, y)` it computes `(x, y) ↦ y`, and its JVP applies the derivative of that map. -/
-theorem lastNotOne_jvp_correct {x y : ℝ} (hy : y ≠ 1) : lastNotOne.IsJvpAt x y := by
+theorem lastNotOne_jvp_correct {x y : ℝ} (hy : y ≠ 1) : (lastNotOne (w := w)).IsJvpAt x y := by
   refine ⟨fun p => p.2, ContinuousLinearMap.snd ℝ ℝ ℝ, ?_, hasFDerivAt_snd,
     fun dx dy => by simp [lastNotOne, Scalar.one_def, hy]⟩
   filter_upwards [(isOpen_ne_fun continuous_snd continuous_const).mem_nhds hy] with p hp
@@ -434,16 +436,16 @@ theorem lastNotOne_jvp_correct {x y : ℝ} (hy : y ≠ 1) : lastNotOne.IsJvpAt x
 /-! ## `lastNotOne` meets every hypothesis of `reduceJvp_correct` except commutativity -/
 
 /-- `lastNotOne` with `1` is a monoid. -/
-theorem lastNotOne_isMonoidOp : IsMonoidOp lastNotOne.op 1 :=
+theorem lastNotOne_isMonoidOp : IsMonoidOp (lastNotOne (w := w)).op 1 :=
   ⟨lastNotOne_assoc, lastNotOne_one_left, lastNotOne_one_right⟩
 
 /-- The JVP of `lastNotOne` passes the tangent through the identity `1` in the second argument. -/
-theorem lastNotOne_jvp_one (a da : ℝ) : lastNotOne.jvp (.fin a) 1 (.fin da) 0 = .fin da := by
+theorem lastNotOne_jvp_one (a da : ℝ) : (lastNotOne (w := w)).jvp (.fin a) 1 (.fin da) 0 = .fin da := by
   simp [lastNotOne, Scalar.eq, Scalar.one_def]
 
 /-- A left fold of `lastNotOne` over values that are `1` or finite and not `1`,
 not all of them `1`, is finite and not `1`. -/
-private theorem foldl_lastNotOne : ∀ (l : List Scalar) (acc : Scalar),
+private theorem foldl_lastNotOne : ∀ (l : List (Scalar w)) (acc : Scalar w),
     (∀ v ∈ acc :: l, v = 1 ∨ ∃ r ≠ 1, v = .fin r) → (∃ v ∈ acc :: l, v ≠ 1) →
       ∃ r ≠ 1, l.foldl lastNotOne.op acc = .fin r
   | [], acc, hl, ⟨v, hv, hv1⟩ => by
@@ -474,10 +476,10 @@ private theorem foldl_lastNotOne : ∀ (l : List Scalar) (acc : Scalar),
 
 /-- Arrays whose entries all differ from `1` are in the domain of `reduceJvp_correct` for `lastNotOne`. -/
 theorem lastNotOne_mem_reduceJvpDomain {s : Shape n} (dimensions : List (Fin n))
-    {x : Index s → ℝ} (hx : ∀ i, x i ≠ 1) : x ∈ reduceJvpDomain lastNotOne 1 dimensions := by
+    {x : Index s → ℝ} (hx : ∀ i, x i ≠ 1) : x ∈ reduceJvpDomain (w := w) lastNotOne 1 dimensions := by
   have key : ∀ (j : Index (s ∘ keptAxes dimensions.toFinset)) (A : Finset _), A.Nonempty →
       ∃ r ≠ 1, reduceOn lastNotOne.op 1
-        (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal x) j) A = .fin r := by
+        (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) (ofReal (w := w) x) j) A = .fin r := by
     rintro j A ⟨p, hp⟩
     refine foldl_lastNotOne _ 1 (fun v hv => ?_) ⟨_, List.mem_cons_of_mem _ (List.mem_ofFn.2 ⟨p, rfl⟩), ?_⟩
     · rcases List.mem_cons.1 hv with rfl | hv
@@ -503,7 +505,7 @@ private theorem rowMajor_symm_rank_one {t : Shape 1} (p : Fin (∏ d, t d)) :
 
 /-- The slice of an operand of shape `(3,)` along its only axis is its list of entries. -/
 private theorem reductionSlice_eq {D : Finset (Fin 1)} (hax : ∀ d, d ∈ [0] ↔ d ∈ D)
-    (x : Tensor (Index ![3])) (j : Index (![3] ∘ keptAxes D)) (p : Fin (∏ k, (![3] ∘ [0].get) k)) :
+    (x : Tensor (.float w) (Index ![3])) (j : Index (![3] ∘ keptAxes D)) (p : Fin (∏ k, (![3] ∘ [0].get) k)) :
     reductionSlice [(0 : Fin 1)] hax x j p = x fun _ => ⟨p, by simpa using p.2⟩ := by
   refine congrArg x (Index.ext_val fun d => ?_)
   rw [Subsingleton.elim d 0, Index.merge_val_of_mem _ _ _ _ (List.mem_singleton_self 0)]
@@ -520,10 +522,10 @@ private def lastIdx : Index ![3] := fun _ => ⟨2, by simp⟩
 
 /-- `reduce` with `lastNotOne` over an operand of shape `(3,)` returns the last entry if it is not `1`. -/
 private theorem reduce_lastNotOne (y : Index ![3] → ℝ) (hy : y lastIdx ≠ 1) :
-    reduce lastNotOne 1 [0] (List.nodup_singleton _) (ofReal y) = ofReal fun _ => y lastIdx := by
+    reduce (w := w) lastNotOne 1 [0] (List.nodup_singleton _) (ofReal y) = ofReal fun _ => y lastIdx := by
   funext j
   have key : ∀ ax : List (Fin 1), ax = [0] → ∀ hax : ∀ d, d ∈ ax ↔ d ∈ ([0] : List (Fin 1)).toFinset,
-      (List.ofFn (reductionSlice ax hax (ofReal y) j)).foldl lastNotOne.op 1 = .fin (y lastIdx) := by
+      (List.ofFn (reductionSlice ax hax (ofReal (w := w) y) j)).foldl lastNotOne.op 1 = .fin (y lastIdx) := by
     rintro ax rfl hax
     rw [List.ofFn_congr (by simp : ∏ k, (![3] ∘ [(0 : Fin 1)].get) k = 3)]
     simp only [List.ofFn_succ, List.ofFn_zero, List.foldl_cons, List.foldl_nil, reductionSlice_eq]
@@ -544,7 +546,7 @@ it is a monoid (`lastNotOne_isMonoidOp`), its JVP passes tangents through the id
 and `reduceJvp_correct_needs_comm` states that it cannot be dropped. -/
 theorem reduceJvp_not_correct :
     ¬ IsJvpOfOn (reduceJvp (s := ![3]) lastNotOne 1 [0] (List.nodup_singleton _))
-      (reduce lastNotOne 1 [0] (List.nodup_singleton _)) {x | ∀ i, x i ≠ 1} := by
+      (reduce (w := w) lastNotOne 1 [0] (List.nodup_singleton _)) {x | ∀ i, x i ≠ 1} := by
   intro hj
   let x₀ : Index ![3] → ℝ := fun i => ((i 0 : ℕ) : ℝ) + 2
   have hx₀ : x₀ ∈ {x | ∀ i, x i ≠ 1} := fun i => by
@@ -562,7 +564,7 @@ theorem reduceJvp_not_correct :
   have hLL : L = L' := hL.unique (L'.hasFDerivAt.congr_of_eventuallyEq hFL)
   -- The rule returns the tangent of the middle entry instead of the last one.
   let g : Index ![3] → ℝ := fun i => if i = lastIdx then 1 else 0
-  obtain ⟨_, _, hv⟩ := hrule g
+  obtain ⟨_, _, _, hv⟩ := hrule g
   have hc : (([0] : List (Fin 1)).toFinset)ᶜ.card = 0 := by decide
   let e : Index (![3] ∘ keptAxes ([0] : List (Fin 1)).toFinset) := fun d => (Fin.cast hc d).elim0
   have := hv e e fun _ => rfl
@@ -575,13 +577,13 @@ theorem reduceJvp_not_correct :
 
 /-- `reduceJvp_correct` is false without commutativity, already for operands of shape `(3,)`. -/
 theorem reduceJvp_correct_needs_comm :
-    ¬ ∀ (computation : Computation) (initValue : Scalar) (dimensions : List (Fin 1))
+    ¬ ∀ (computation : Computation w) (initValue : Scalar w) (dimensions : List (Fin 1))
       (hd : dimensions.Nodup), IsMonoidOp computation.op initValue →
       (∀ a da : ℝ, computation.jvp (.fin a) initValue (.fin da) 0 = .fin da) →
       ((∃ c : ℝ, initValue = .fin c) ∨ ∀ d ∈ dimensions, (![3] : Shape 1) d ≠ 0) →
       IsJvpOfOn (reduceJvp (s := ![3]) computation initValue dimensions hd)
-        (reduce computation initValue dimensions hd)
-        (reduceJvpDomain computation initValue dimensions) := fun h =>
+        (reduce (w := w) computation initValue dimensions hd)
+        (reduceJvpDomain (w := w) computation initValue dimensions) := fun h =>
   reduceJvp_not_correct fun x hx =>
     h lastNotOne 1 [0] _ lastNotOne_isMonoidOp lastNotOne_jvp_one (.inl ⟨1, rfl⟩) x
       (lastNotOne_mem_reduceJvpDomain _ hx)

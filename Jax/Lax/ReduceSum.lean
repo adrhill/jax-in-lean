@@ -12,13 +12,13 @@ Differentiation rules of the `reduce_sum` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `reduce_sum`, which applies the primitive to the tangent.
 `jax/_src/lax/lax.py:9291`: `ad.deflinear2(reduce_sum_p, _reduce_sum_transpose_rule)` and
 `jax/_src/interpreters/ad.py:950`: `return val_out, primitive.bind(*tangents, **params)` -/
-def reduceSumJvp (axes : Finset (Fin n)) (operandDot _operand : Tensor (Index s)) :
-    Tensor (Index (s ∘ keptAxes axes)) :=
+def reduceSumJvp (axes : Finset (Fin n)) (operandDot _operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (s ∘ keptAxes axes)) :=
   reduceSum axes operandDot
 
 /-- `reduce_sum` on finite arrays. -/
@@ -29,13 +29,13 @@ private def reduceSumReal (axes : Finset (Fin n)) :
   map_smul' _ _ := by ext; simp [Finset.mul_sum]
 
 private theorem reduceSum_ofReal (axes : Finset (Fin n)) (x : Index s → ℝ) :
-    reduceSum axes (ofReal x) = ofReal (reduceSumReal axes x) := by
+    reduceSum (w := w) axes (ofReal x) = ofReal (reduceSumReal axes x) := by
   funext j
   simp [reduceSum, ofReal, reduceSumReal, Scalar.fin_sum]
 
 /-- The JVP rule of `reduce_sum` computes the derivative of `reduce_sum`. -/
 theorem reduceSumJvp_correct (axes : Finset (Fin n)) :
-    IsJvpOf (reduceSumJvp axes) (reduceSum (s := s) axes) :=
+    IsJvpOf (reduceSumJvp axes) (reduceSum (s := s) (w := w) axes) :=
   isJvpOf_of_linear (reduceSumReal axes) (reduceSum_ofReal axes)
 
 /-- The transpose rule of `reduce_sum`, which broadcasts the cotangent back over the summed axes.
@@ -52,13 +52,13 @@ def _reduce_sum_transpose_rule(cotangent, operand, *, axes, out_sharding):
   assert result.shape == input_shape
   return [result]
 ``` -/
-def reduceSumTranspose (axes : Finset (Fin n)) (cotangent : Tensor (Index (s ∘ keptAxes axes))) :
-    Tensor (Index s) :=
+def reduceSumTranspose (axes : Finset (Fin n)) (cotangent : Tensor (.float w) (Index (s ∘ keptAxes axes))) :
+    Tensor (.float w) (Index s) :=
   broadcastInDim s (keptAxes axes) (.refl _) (keptAxes_injective axes) cotangent
 
 /-- The transpose rule of `reduce_sum` transposes `reduce_sum`. -/
 theorem reduceSumTranspose_correct (axes : Finset (Fin n)) :
-    IsTransposeOf (reduceSumTranspose axes) (reduceSum (s := s) axes) := by
+    IsTransposeOf (reduceSumTranspose axes) (reduceSum (s := s) (w := w) axes) := by
   intro ct x
   refine ⟨reduceSumReal axes x, fun i => ct (i.proj (keptAxes axes)), reduceSum_ofReal axes x,
     .of_eq ?_, ?_⟩

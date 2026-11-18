@@ -33,7 +33,7 @@ The batching rule `_gather_batching_rule` is not modelled yet.
 
 namespace Jax.Lax
 
-variable {n ni nu : ℕ}
+variable {n ni nu : ℕ} {w : FloatWidth} {wi : IntWidth}
 
 /-! ## Dimension numbers -/
 
@@ -128,7 +128,7 @@ theorem scatterSliceSizes_gatherShape {so : Shape n} {si : Shape ni} {dn : Gathe
 /-- A clamped window lies inside the operand if no slice is larger than the operand,
 the batching index is a position of the operand, and the offset is a position of the slice. -/
 theorem gatherIndex_isSome_of {so : Shape n} {si : Shape ni} {dn : GatherDimensionNumbers}
-    {sliceSizes : List ℕ} (indices : Index si → ℤ) (j : ℕ → ℕ)
+    {sliceSizes : List ℕ} (indices : Tensor (.int wi) (Index si)) (j : ℕ → ℕ)
     (hss : ∀ d : Fin n, sliceSizes.getD d 0 ≤ so d)
     (hsb : ∀ d ∈ dn.startIndexMap, d ∉ dn.operandBatchingDims)
     (hb : ∀ d : Fin n, (d : ℕ) ∈ dn.operandBatchingDims →
@@ -178,7 +178,7 @@ theorem gatherIndex_isSome_of {so : Shape n} {si : Shape ni} {dn : GatherDimensi
 the clamped windows lie inside the operand, and `gather` does not use its fill value. -/
 theorem gatherIndex_isSome {so : Shape n} {si : Shape ni} {dn : GatherDimensionNumbers}
     {sliceSizes : List ℕ} (h : GatherValid so si dn sliceSizes)
-    (hl : GatherLowers so si dn sliceSizes) (indices : Index si → ℤ)
+    (hl : GatherLowers so si dn sliceSizes) (indices : Tensor (.int wi) (Index si))
     (j : Index (gatherShape si dn sliceSizes)) :
     (gatherIndex so si dn sliceSizes true indices j.val).isSome := by
   have hW := h.length_windowDims
@@ -238,21 +238,21 @@ def gatherJvp {so : Shape n} {si : Shape ni} (dimensionNumbers : GatherDimension
     (sliceSizes : List ℕ) (mode : GatherScatterMode)
     (h : GatherValid so si dimensionNumbers sliceSizes)
     (hl : GatherLowers so si dimensionNumbers sliceSizes)
-    (g _operand : Tensor (Index so)) (indices : Index si → ℤ) :
-    Tensor (Index (gatherShape si dimensionNumbers sliceSizes)) :=
+    (g _operand : Tensor (.float w) (Index so)) (indices : Tensor (.int wi) (Index si)) :
+    Tensor (.float w) (Index (gatherShape si dimensionNumbers sliceSizes)) :=
   gather dimensionNumbers sliceSizes mode 0 h hl g indices
 
 /-- The JVP rule of `gather` computes the derivative of `gather` in the operand,
 if the fill value is finite or every window lies inside the operand. -/
 theorem gatherJvp_correct {so : Shape n} {si : Shape ni} (dn : GatherDimensionNumbers)
-    (sliceSizes : List ℕ) (mode : GatherScatterMode) (fillValue : Scalar)
+    (sliceSizes : List ℕ) (mode : GatherScatterMode) (fillValue : Scalar w)
     (h : GatherValid so si dn sliceSizes) (hl : GatherLowers so si dn sliceSizes)
-    (indices : Index si → ℤ)
+    (indices : Tensor (.int wi) (Index si))
     (hfill : ∀ j : Index (gatherShape si dn sliceSizes),
       gatherIndex so si dn sliceSizes (mode != .fillOrDrop) indices j.val = none →
         ∃ r : ℝ, fillValue = .fin r) :
     IsJvpOf (fun g x => gatherJvp dn sliceSizes mode h hl g x indices)
-      (fun x => gather dn sliceSizes mode fillValue h hl x indices) := by
+      (fun x => gather (w := w) dn sliceSizes mode fillValue h hl x indices) := by
   refine isJvpOfOn_of_apply fun x _ g j => ?_
   cases hp : gatherIndex so si dn sliceSizes (mode != .fillOrDrop) indices j.val with
   | some i =>
@@ -266,12 +266,12 @@ theorem gatherJvp_correct {so : Shape n} {si : Shape ni} (dn : GatherDimensionNu
 /-- No JVP rule is correct for a `gather` that fills a window with a value that is not finite,
 such as the default fill value NaN: the result is not a real array. -/
 theorem gather_not_isJvpOf {so : Shape n} {si : Shape ni} {dn : GatherDimensionNumbers}
-    {sliceSizes : List ℕ} {mode : GatherScatterMode} {fillValue : Scalar}
+    {sliceSizes : List ℕ} {mode : GatherScatterMode} {fillValue : Scalar w}
     (h : GatherValid so si dn sliceSizes) (hl : GatherLowers so si dn sliceSizes)
-    (indices : Index si → ℤ) (j : Index (gatherShape si dn sliceSizes))
+    (indices : Tensor (.int wi) (Index si)) (j : Index (gatherShape si dn sliceSizes))
     (hj : gatherIndex so si dn sliceSizes (mode != .fillOrDrop) indices j.val = none)
     (hfill : ∀ r : ℝ, fillValue ≠ .fin r) {n' : ℕ} {t' : Shape n'}
-    (jvp : Tensor (Index so) → Tensor (Index so) → Tensor (Index t')) :
+    (jvp : Tensor (.float w) (Index so) → Tensor (.float w) (Index so) → Tensor (.float w) (Index t')) :
     ¬ IsJvpOf jvp (fun x => gather dn sliceSizes mode fillValue h hl x indices) := by
   intro hjvp
   obtain ⟨F, -, hF, -⟩ := hjvp 0 (Set.mem_univ _)
@@ -298,8 +298,8 @@ which does not follow from the shape check of `gather` (`gatherTranspose_not_def
 def gatherTranspose (so : Shape n) {si : Shape ni} (dimensionNumbers : GatherDimensionNumbers)
     (sliceSizes : List ℕ) (mode : GatherScatterMode)
     (hs : ScatterValid so si (gatherShape si dimensionNumbers sliceSizes) dimensionNumbers.toScatter)
-    (outCt : Tensor (Index (gatherShape si dimensionNumbers sliceSizes))) (indices : Index si → ℤ) :
-    Tensor (Index so) :=
+    (outCt : Tensor (.float w) (Index (gatherShape si dimensionNumbers sliceSizes))) (indices : Tensor (.int wi) (Index si)) :
+    Tensor (.float w) (Index so) :=
   scatterAdd dimensionNumbers.toScatter mode hs 0 indices outCt
 
 /-- The transpose rule of `gather` raises for some gathers:
@@ -317,9 +317,9 @@ theorem gatherTranspose_correct {so : Shape n} {si : Shape ni} (dn : GatherDimen
     (sliceSizes : List ℕ) (mode : GatherScatterMode) (h : GatherValid so si dn sliceSizes)
     (hl : GatherLowers so si dn sliceSizes)
     (hs : ScatterValid so si (gatherShape si dn sliceSizes) dn.toScatter)
-    (indices : Index si → ℤ) (hm : mode ≠ .promiseInBounds) :
+    (indices : Tensor (.int wi) (Index si)) (hm : mode ≠ .promiseInBounds) :
     IsTransposeOf (fun ct => gatherTranspose so dn sliceSizes mode hs ct indices)
-      (fun x => gather dn sliceSizes mode 0 h hl x indices) := by
+      (fun x => gather (w := w) dn sliceSizes mode 0 h hl x indices) := by
   intro ct x
   let P : Index (gatherShape si dn sliceSizes) → Option (Index so) :=
     fun j => gatherIndex so si dn sliceSizes (mode != .fillOrDrop) indices j.val
@@ -349,9 +349,9 @@ The docstring of `GatherScatterMode` says that gradients are not correct in this
 theorem gatherTranspose_promiseInBounds_not_correct :
     ¬ IsTransposeOf
       (fun ct => gatherTranspose ![2] (si := ![1, 1]) ⟨[], [0], [0], [], []⟩ [1] .promiseInBounds
-        (by decide) ct fun _ => 5)
-      (fun x => gather (so := ![2]) (si := ![1, 1]) ⟨[], [0], [0], [], []⟩ [1] .promiseInBounds 0
-        (by decide) (by decide) x fun _ => 5) := by
+        (by decide) ct (wi := wi) fun _ => 5)
+      (fun x => gather (w := w) (wi := wi) (so := ![2]) (si := ![1, 1]) ⟨[], [0], [0], [], []⟩ [1]
+        .promiseInBounds 0 (by decide) (by decide) x fun _ => 5) := by
   intro htr
   obtain ⟨y, u, hy, hu, hsum⟩ := htr (fun _ => 1) (fun _ => 1)
   have hread : ∀ j : Index (gatherShape ![1, 1] ⟨[], [0], [0], [], []⟩ [1]),

@@ -23,7 +23,7 @@ as `scatterAddTranspose_promiseInBounds_not_correct` shows for `scatter_add`.
 
 namespace Jax.Lax
 
-variable {n ni nu : ℕ} {so : Shape n} {si : Shape ni} {su : Shape nu}
+variable {n ni nu : ℕ} {so : Shape n} {si : Shape ni} {su : Shape nu} {w : FloatWidth} {wi : IntWidth}
 
 /-! ## Rules -/
 
@@ -35,9 +35,9 @@ ad.primitive_jvps[scatter_sub_p] = partial(_scatter_addsub_jvp, scatter_sub_p)
 ``` -/
 def scatterSubJvp (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
     (h : ScatterValid so si su dimensionNumbers)
-    (gOperand : Tensor (Index so)) (gUpdates : Tensor (Index su))
-    (_operand : Tensor (Index so)) (indices : Index si → ℤ) (_updates : Tensor (Index su)) :
-    Tensor (Index so) :=
+    (gOperand : Tensor (.float w) (Index so)) (gUpdates : Tensor (.float w) (Index su))
+    (_operand : Tensor (.float w) (Index so)) (indices : Tensor (.int wi) (Index si)) (_updates : Tensor (.float w) (Index su)) :
+    Tensor (.float w) (Index so) :=
   scatterSub dimensionNumbers mode h gOperand indices gUpdates
 
 /-- The transpose rule of `scatter_sub`.
@@ -48,9 +48,9 @@ which negates the cotangent of `updates`, `jax/_src/lax/slicing.py:2908`:
         update_t = lax.neg(update_t)
 ``` -/
 def scatterSubTranspose (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (t : Tensor (Index so)) (operand : Option (Tensor (Index so))) (indices : Index si → ℤ)
-    (updates : Option (Tensor (Index su))) :
-    Option (Option (Tensor (Index so)) × Option (Tensor (Index
+    (t : Tensor (.float w) (Index so)) (operand : Option (Tensor (.float w) (Index so))) (indices : Tensor (.int wi) (Index si))
+    (updates : Option (Tensor (.float w) (Index su))) :
+    Option (Option (Tensor (.float w) (Index so)) × Option (Tensor (.float w) (Index
       (gatherShape si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers))))) :=
   let operandT := if operand.isNone then some t else none
   if updates.isNone then
@@ -65,28 +65,28 @@ def scatterSubTranspose (dimensionNumbers : ScatterDimensionNumbers) (mode : Gat
 
 /-- `scatter_sub` adds the negated updates. -/
 theorem scatterSub_eq_scatterAdd (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (h : ScatterValid so si su dn) (operand : Tensor (Index so)) (indices : Index si → ℤ)
-    (updates : Tensor (Index su)) :
+    (h : ScatterValid so si su dn) (operand : Tensor (.float w) (Index so)) (indices : Tensor (.int wi) (Index si))
+    (updates : Tensor (.float w) (Index su)) :
     scatterSub dn mode h operand indices updates = scatterAdd dn mode h operand indices (neg updates) :=
   rfl
 
 /-- The real function that `scatter_sub` computes. -/
 noncomputable def scatterSubReal (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (indices : Index si → ℤ) : (Index so → ℝ) × (Index su → ℝ) →ₗ[ℝ] Index so → ℝ :=
+    (indices : Tensor (.int wi) (Index si)) : (Index so → ℝ) × (Index su → ℝ) →ₗ[ℝ] Index so → ℝ :=
   (scatterAddReal dn mode indices).comp (LinearMap.prodMap LinearMap.id (-LinearMap.id))
 
 theorem scatterSub_ofReal (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (h : ScatterValid so si su dn) (indices : Index si → ℤ) (x : Index so → ℝ) (y : Index su → ℝ) :
-    scatterSub dn mode h (ofReal x) indices (ofReal y) =
+    (h : ScatterValid so si su dn) (indices : Tensor (.int wi) (Index si)) (x : Index so → ℝ) (y : Index su → ℝ) :
+    scatterSub (w := w) dn mode h (ofReal x) indices (ofReal y) =
       ofReal (scatterSubReal dn mode indices (x, y)) := by
-  rw [scatterSub_eq_scatterAdd, show neg (ofReal y) = ofReal (-y) from rfl, scatterAdd_ofReal]
+  rw [scatterSub_eq_scatterAdd, show neg (ofReal (w := w) y) = ofReal (-y) from rfl, scatterAdd_ofReal]
   rfl
 
 /-- The JVP rule of `scatter_sub` computes the derivative of `scatter_sub`. -/
 theorem scatterSubJvp_correct (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (h : ScatterValid so si su dn) (indices : Index si → ℤ) :
+    (h : ScatterValid so si su dn) (indices : Tensor (.int wi) (Index si)) :
     IsJointJvp₂Of (fun g k x y => scatterSubJvp dn mode h g k x indices y)
-      (fun x y => scatterSub dn mode h x indices y) := by
+      (fun x y => scatterSub (w := w) dn mode h x indices y) := by
   intro x y _
   let L := LinearMap.toContinuousLinearMap (scatterSubReal (so := so) (su := su) dn mode indices)
   exact ⟨scatterSubReal dn mode indices, L,
@@ -99,15 +99,15 @@ theorem scatterSubTranspose_correct (dn : ScatterDimensionNumbers) (mode : Gathe
     (h : ScatterValid so si su dn)
     (hg : GatherValid so si dn.toGather (scatterSliceSizes n su dn))
     (hgl : GatherLowers so si dn.toGather (scatterSliceSizes n su dn))
-    (indices : Index si → ℤ) (hm : mode ≠ .promiseInBounds) :
+    (indices : Tensor (.int wi) (Index si)) (hm : mode ≠ .promiseInBounds) :
     IsPartialTranspose₂Of (fun t x y => scatterSubTranspose dn mode t x indices y)
-      (fun x y => scatterSub dn mode h x indices y) := by
+      (fun x y => scatterSub (w := w) dn mode h x indices y) := by
   refine ⟨id,
     fun t => neg (gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl t indices),
     fun ct x y => ?_, fun ct x y hxy => ?_⟩
-  · obtain ⟨z, u, v, hz, hu, ⟨hr, hs, he⟩, hsum⟩ :=
+  · obtain ⟨z, u, v, hz, hu, ⟨_, hr, hs, he⟩, hsum⟩ :=
       scatterAdd_isTranspose₂Of dn mode h hg hgl indices hm ct x (-y)
-    refine ⟨z, u, -v, hz, hu, ⟨hr, hs, fun i j hij => ?_⟩, ?_⟩
+    refine ⟨z, u, -v, hz, hu, ⟨rfl, hr, hs, fun i j hij => ?_⟩, ?_⟩
     · show -(gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl (ofReal ct) indices i) = _
       exact (congrArg (-·) (he i j hij)).trans rfl
     · simpa using hsum
@@ -120,12 +120,13 @@ theorem scatterSubTranspose_correct (dn : ScatterDimensionNumbers) (mode : Gathe
 here the operand has shape `(0,)`, as in `jnp.zeros(0).at[jnp.array([0])].subtract(updates)`.
 `scatter_sub` accepts it and drops the update, but the `gather` of the rule has slice size 1
 on the axis of size 0, which its shape rule rejects. -/
-theorem scatterSubTranspose_not_correct (mode : GatherScatterMode) (indices : Index ![1, 1] → ℤ) :
+theorem scatterSubTranspose_not_correct (mode : GatherScatterMode)
+    (indices : Tensor (.int wi) (Index ![1, 1])) :
     ¬ IsPartialTranspose₂Of
       (fun t x y => scatterSubTranspose (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode t x
         indices y)
-      (fun x y => scatterSub (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode (by decide) x
-        indices y) := by
+      (fun x y => scatterSub (w := w) (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode
+        (by decide) x indices y) := by
   rintro ⟨_, _, _, hrule⟩
   obtain ⟨_, _, hsome, _⟩ := hrule 0 (some 0) none (.inr rfl)
   have hno : ¬ (GatherValid ![0] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)

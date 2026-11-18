@@ -12,50 +12,57 @@ public import Mathlib.Analysis.Calculus.Deriv.Comp
 /-!
 # Core definitions
 
-Arrays are functions from an index type to scalars.
+An array of dtype `d` is a function from an index type to the entries `d.Elem`.
 An array of shape `s` has the index type `Index s`.
+The entries of a float array, `Scalar w`, carry the width `w`,
+so arrays of different widths have different types.
 
 Differentiation is a statement about finite arrays.
 The correctness notions below embed real arrays with `ofReal`
-and require the rules to return finite arrays of the right shape.
+and require the rules to return finite arrays of the right shape and dtype.
 -/
 
 @[expose] public section
 
 namespace Jax
 
-/-- An array with index type `ι`. -/
-abbrev Tensor (ι : Type) := ι → Scalar
+/-- An array of dtype `d` with index type `ι`. -/
+abbrev Tensor (d : DType) (ι : Type) := ι → d.Elem
 
-/-- The array with the finite entries `x`. -/
-def ofReal {ι : Type} (x : ι → ℝ) : Tensor ι := fun i => .fin (x i)
+/-- The floating-point array of width `w` with the finite entries `x`. -/
+def ofReal {w : FloatWidth} {ι : Type} (x : ι → ℝ) : Tensor (.float w) ι := fun i => .fin (x i)
 
-variable {m m' n n' k k' : ℕ}
+variable {m m' n n' k k' : ℕ} {w w' wx wy : FloatWidth} {d d' d₁ d₂ d₃ : DType}
 
-/-- `a` and `b` are the same array: they have the same rank, the same shape and the same entries.
-This compares arrays whose shapes are computed in different ways. -/
-def Tensor.Same {s : Shape m} {t : Shape n} (a : Tensor (Index s)) (b : Tensor (Index t)) : Prop :=
-  ∃ h : m = n, (∀ d, s d = t (Fin.cast h d)) ∧
-    ∀ i j, (∀ d, (i d : ℕ) = j (Fin.cast h d)) → a i = b j
+/-- `a` and `b` are the same array: they have the same dtype, the same rank, the same shape
+and the same entries.
+This compares arrays whose dtypes and shapes are computed in different ways. -/
+def Tensor.Same {d d' : DType} {s : Shape m} {t : Shape n} (a : Tensor d (Index s))
+    (b : Tensor d' (Index t)) : Prop :=
+  ∃ hd : d = d', ∃ h : m = n, (∀ e, s e = t (Fin.cast h e)) ∧
+    ∀ i j, (∀ e, (i e : ℕ) = j (Fin.cast h e)) → cast (congrArg DType.Elem hd) (a i) = b j
 
 /-! ## JVP rules of unary primitives -/
 
 /-- `jvp` is a correct JVP rule for `f` at every finite array `x` in `dom`:
 near `x`, `f` computes a real function `F`, which is differentiable at `x`,
 and `jvp g x` is the derivative of `F` at `x` applied to the finite tangent `g`.
+The input of `f` has dtype `float w` and its output `float w'`, so their tangents have the same dtypes
+(`DType.tangent`), and the rule must return an array of dtype `float w'`.
 
 The tangent comes first, as in the rules passed to `ad.defjvp`. -/
 def IsJvpOfOn {s : Shape m} {t : Shape n} {t' : Shape n'}
-    (jvp : Tensor (Index s) → Tensor (Index s) → Tensor (Index t'))
-    (f : Tensor (Index s) → Tensor (Index t)) (dom : Set (Index s → ℝ)) : Prop :=
+    (jvp : Tensor (.float w) (Index s) → Tensor (.float w) (Index s) → Tensor d (Index t'))
+    (f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t)) (dom : Set (Index s → ℝ)) :
+    Prop :=
   ∀ x ∈ dom, ∃ (F : (Index s → ℝ) → Index t → ℝ) (L : (Index s → ℝ) →L[ℝ] Index t → ℝ),
     (∀ᶠ y in nhds x, f (ofReal y) = ofReal (F y)) ∧ HasFDerivAt F L x ∧
-    ∀ g, (jvp (ofReal g) (ofReal x)).Same (ofReal (L g))
+    ∀ g, (jvp (ofReal g) (ofReal x)).Same (ofReal (w := w') (L g))
 
 /-- `jvp` is a correct JVP rule for `f` at every finite array. -/
 def IsJvpOf {s : Shape m} {t : Shape n} {t' : Shape n'}
-    (jvp : Tensor (Index s) → Tensor (Index s) → Tensor (Index t'))
-    (f : Tensor (Index s) → Tensor (Index t)) : Prop :=
+    (jvp : Tensor (.float w) (Index s) → Tensor (.float w) (Index s) → Tensor d (Index t'))
+    (f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t)) : Prop :=
   IsJvpOfOn jvp f Set.univ
 
 /-! ## JVP rules of binary primitives -/
@@ -64,6 +71,7 @@ def IsJvpOf {s : Shape m} {t : Shape n} {t' : Shape n'}
 near `(x, y)`, `f` computes a real function `F`, which is differentiable at `(x, y)`,
 both rules return finite arrays of the output shape,
 and their sum is the derivative of `F` at `(x, y)` applied to the finite tangents `(g, h)`.
+Both rules must return arrays of the dtype of the output of `f`, the dtype of its tangents.
 
 `ad.defjvp` takes one rule per argument and adds their results.
 `jax/_src/interpreters/ad.py:978`:
@@ -76,23 +84,27 @@ def standard_jvp(jvprules, primitive, primals, tangents, **params):
 ```
 Symbolic zero tangents are not modelled: both rules are always evaluated. -/
 def IsJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {tx : Shape k} {ty : Shape k'}
-    (jvpX : Tensor (Index sx) → Tensor (Index sx) → Tensor (Index sy) → Tensor (Index tx))
-    (jvpY : Tensor (Index sy) → Tensor (Index sx) → Tensor (Index sy) → Tensor (Index ty))
-    (f : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index t))
+    (jvpX : Tensor (.float wx) (Index sx) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor d₁ (Index tx))
+    (jvpY : Tensor (.float wy) (Index sy) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor d₂ (Index ty))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t))
     (dom : Set ((Index sx → ℝ) × (Index sy → ℝ))) : Prop :=
   ∀ x y, (x, y) ∈ dom →
     ∃ (F : (Index sx → ℝ) × (Index sy → ℝ) → Index t → ℝ)
       (L : (Index sx → ℝ) × (Index sy → ℝ) →L[ℝ] Index t → ℝ),
     (∀ᶠ p in nhds (x, y), f (ofReal p.1) (ofReal p.2) = ofReal (F p)) ∧ HasFDerivAt F L (x, y) ∧
     ∀ g h, ∃ dx dy : Index t → ℝ,
-      (jvpX (ofReal g) (ofReal x) (ofReal y)).Same (ofReal dx) ∧
-      (jvpY (ofReal h) (ofReal x) (ofReal y)).Same (ofReal dy) ∧ L (g, h) = dx + dy
+      (jvpX (ofReal g) (ofReal x) (ofReal y)).Same (ofReal (w := w) dx) ∧
+      (jvpY (ofReal h) (ofReal x) (ofReal y)).Same (ofReal (w := w) dy) ∧ L (g, h) = dx + dy
 
 /-- `jvpX` and `jvpY` are correct JVP rules for the binary `f` at every pair of finite arrays. -/
 def IsJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {tx : Shape k} {ty : Shape k'}
-    (jvpX : Tensor (Index sx) → Tensor (Index sx) → Tensor (Index sy) → Tensor (Index tx))
-    (jvpY : Tensor (Index sy) → Tensor (Index sx) → Tensor (Index sy) → Tensor (Index ty))
-    (f : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index t)) : Prop :=
+    (jvpX : Tensor (.float wx) (Index sx) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor d₁ (Index tx))
+    (jvpY : Tensor (.float wy) (Index sy) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor d₂ (Index ty))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)) : Prop :=
   IsJvp₂OfOn jvpX jvpY f Set.univ
 
 /-- `jvp` is a correct JVP rule for the binary `f` at every pair of finite arrays in `dom`,
@@ -102,22 +114,22 @@ near `(x, y)`, `f` computes a real function `F`, which is differentiable at `(x,
 and `jvp g h x y` is the derivative of `F` at `(x, y)` applied to the finite tangents `(g, h)`.
 The tangents come first, then the primals. -/
 def IsJointJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape k}
-    (jvp : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index sx) → Tensor (Index sy) →
-      Tensor (Index t'))
-    (f : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index t))
+    (jvp : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
+      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor d (Index t'))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t))
     (dom : Set ((Index sx → ℝ) × (Index sy → ℝ))) : Prop :=
   ∀ x y, (x, y) ∈ dom →
     ∃ (F : (Index sx → ℝ) × (Index sy → ℝ) → Index t → ℝ)
       (L : (Index sx → ℝ) × (Index sy → ℝ) →L[ℝ] Index t → ℝ),
     (∀ᶠ p in nhds (x, y), f (ofReal p.1) (ofReal p.2) = ofReal (F p)) ∧ HasFDerivAt F L (x, y) ∧
-    ∀ g h, (jvp (ofReal g) (ofReal h) (ofReal x) (ofReal y)).Same (ofReal (L (g, h)))
+    ∀ g h, (jvp (ofReal g) (ofReal h) (ofReal x) (ofReal y)).Same (ofReal (w := w) (L (g, h)))
 
 /-- `jvp` is a correct JVP rule for the binary `f`, taking both tangents together,
 at every pair of finite arrays. -/
 def IsJointJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape k}
-    (jvp : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index sx) → Tensor (Index sy) →
-      Tensor (Index t'))
-    (f : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index t)) : Prop :=
+    (jvp : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
+      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor d (Index t'))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)) : Prop :=
   IsJointJvp₂OfOn jvp f Set.univ
 
 /-! ## JVP rules of ternary primitives -/
@@ -129,14 +141,15 @@ the rules return finite arrays of the output shape,
 and their sum is the derivative of `F` at `(a, b, c)` applied to the finite tangents.
 Each rule takes the tangent of its argument, then the three primals, as in `ad.defjvp`. -/
 def IsJvp₃OfOn {ra rb rc r ra' rb' rc' : ℕ} {sa : Shape ra} {sb : Shape rb} {sc : Shape rc}
-    {t : Shape r} {ta : Shape ra'} {tb : Shape rb'} {tc : Shape rc'}
-    (jvpA : Tensor (Index sa) → Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) →
-      Tensor (Index ta))
-    (jvpB : Tensor (Index sb) → Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) →
-      Tensor (Index tb))
-    (jvpC : Tensor (Index sc) → Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) →
-      Tensor (Index tc))
-    (f : Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) → Tensor (Index t))
+    {t : Shape r} {ta : Shape ra'} {tb : Shape rb'} {tc : Shape rc'} {wa wb wc : FloatWidth}
+    (jvpA : Tensor (.float wa) (Index sa) → Tensor (.float wa) (Index sa) →
+      Tensor (.float wb) (Index sb) → Tensor (.float wc) (Index sc) → Tensor d₁ (Index ta))
+    (jvpB : Tensor (.float wb) (Index sb) → Tensor (.float wa) (Index sa) →
+      Tensor (.float wb) (Index sb) → Tensor (.float wc) (Index sc) → Tensor d₂ (Index tb))
+    (jvpC : Tensor (.float wc) (Index sc) → Tensor (.float wa) (Index sa) →
+      Tensor (.float wb) (Index sb) → Tensor (.float wc) (Index sc) → Tensor d₃ (Index tc))
+    (f : Tensor (.float wa) (Index sa) → Tensor (.float wb) (Index sb) →
+      Tensor (.float wc) (Index sc) → Tensor (.float w) (Index t))
     (dom : Set ((Index sa → ℝ) × (Index sb → ℝ) × (Index sc → ℝ))) : Prop :=
   ∀ a b c, (a, b, c) ∈ dom →
     ∃ (F : (Index sa → ℝ) × (Index sb → ℝ) × (Index sc → ℝ) → Index t → ℝ)
@@ -144,29 +157,30 @@ def IsJvp₃OfOn {ra rb rc r ra' rb' rc' : ℕ} {sa : Shape ra} {sb : Shape rb} 
     (∀ᶠ p in nhds (a, b, c), f (ofReal p.1) (ofReal p.2.1) (ofReal p.2.2) = ofReal (F p)) ∧
     HasFDerivAt F L (a, b, c) ∧
     ∀ ga gb gc, ∃ da db dc : Index t → ℝ,
-      (jvpA (ofReal ga) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal da) ∧
-      (jvpB (ofReal gb) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal db) ∧
-      (jvpC (ofReal gc) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal dc) ∧
+      (jvpA (ofReal ga) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) da) ∧
+      (jvpB (ofReal gb) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) db) ∧
+      (jvpC (ofReal gc) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) dc) ∧
       L (ga, gb, gc) = da + db + dc
 
 /-- `jvpA`, `jvpB` and `jvpC` are correct JVP rules for the ternary `f`
 at every triple of finite arrays. -/
 def IsJvp₃Of {ra rb rc r ra' rb' rc' : ℕ} {sa : Shape ra} {sb : Shape rb} {sc : Shape rc}
-    {t : Shape r} {ta : Shape ra'} {tb : Shape rb'} {tc : Shape rc'}
-    (jvpA : Tensor (Index sa) → Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) →
-      Tensor (Index ta))
-    (jvpB : Tensor (Index sb) → Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) →
-      Tensor (Index tb))
-    (jvpC : Tensor (Index sc) → Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) →
-      Tensor (Index tc))
-    (f : Tensor (Index sa) → Tensor (Index sb) → Tensor (Index sc) → Tensor (Index t)) : Prop :=
+    {t : Shape r} {ta : Shape ra'} {tb : Shape rb'} {tc : Shape rc'} {wa wb wc : FloatWidth}
+    (jvpA : Tensor (.float wa) (Index sa) → Tensor (.float wa) (Index sa) →
+      Tensor (.float wb) (Index sb) → Tensor (.float wc) (Index sc) → Tensor d₁ (Index ta))
+    (jvpB : Tensor (.float wb) (Index sb) → Tensor (.float wa) (Index sa) →
+      Tensor (.float wb) (Index sb) → Tensor (.float wc) (Index sc) → Tensor d₂ (Index tb))
+    (jvpC : Tensor (.float wc) (Index sc) → Tensor (.float wa) (Index sa) →
+      Tensor (.float wb) (Index sb) → Tensor (.float wc) (Index sc) → Tensor d₃ (Index tc))
+    (f : Tensor (.float wa) (Index sa) → Tensor (.float wb) (Index sb) →
+      Tensor (.float wc) (Index sc) → Tensor (.float w) (Index t)) : Prop :=
   IsJvp₃OfOn jvpA jvpB jvpC f Set.univ
 
 /-! ## Zero JVP rules -/
 
 /-- The zero tangent of `ad.defjvp_zero` is correct for the binary `f` at every pair of finite arrays
 in `dom`: near `(x, y)`, `f` is constant.
-The output of `f` need not be real. For a boolean output, whose tangent has dtype `float0`,
+The output of `f` may have any dtype. For a boolean output, whose tangent has dtype `float0`,
 local constancy is what the zero tangent claims: it makes the chain rule through `select_n` correct.
 `jax/_src/interpreters/ad.py:1041`:
 ```
@@ -174,15 +188,15 @@ def zero_jvp(primitive, primals, tangents, **params):
   r = primitive.bind(*primals, **params)
   return r, p2tz(r)
 ``` -/
-def IsZeroJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {α : Type}
-    (f : Tensor (Index sx) → Tensor (Index sy) → Index t → α)
+def IsZeroJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n}
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor d (Index t))
     (dom : Set ((Index sx → ℝ) × (Index sy → ℝ))) : Prop :=
   ∀ x y, (x, y) ∈ dom →
     ∀ᶠ p in nhds (x, y), f (ofReal p.1) (ofReal p.2) = f (ofReal x) (ofReal y)
 
 /-- The zero tangent is correct for the binary `f` at every pair of finite arrays. -/
-def IsZeroJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {α : Type}
-    (f : Tensor (Index sx) → Tensor (Index sy) → Index t → α) : Prop :=
+def IsZeroJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n}
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor d (Index t)) : Prop :=
   IsZeroJvp₂OfOn f Set.univ
 
 /-! ## Transpose rules
@@ -198,12 +212,15 @@ and a cotangent has the shape of the output of `f`.
 /-- `tr` is a correct transpose rule for `f`, that is, the adjoint of `f`:
 on finite arrays, `f` returns a finite array, `tr` returns a finite array of the shape of the input,
 and pairing a cotangent `ct` with `f x` equals pairing `tr ct` with `x`.
+A cotangent has the dtype of the tangents of the output of `f`,
+and `tr` must return the dtype of the tangents of its input.
 
 The cotangent comes first, as in the rules passed to `ad.deflinear2`. -/
 def IsTransposeOf {s : Shape m} {s' : Shape m'} {t : Shape n}
-    (tr : Tensor (Index t) → Tensor (Index s')) (f : Tensor (Index s) → Tensor (Index t)) : Prop :=
+    (tr : Tensor (.float w') (Index t) → Tensor d (Index s'))
+    (f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t)) : Prop :=
   ∀ (ct : Index t → ℝ) (x : Index s → ℝ), ∃ (y : Index t → ℝ) (u : Index s → ℝ),
-    f (ofReal x) = ofReal y ∧ (tr (ofReal ct)).Same (ofReal u) ∧
+    f (ofReal x) = ofReal y ∧ (tr (ofReal ct)).Same (ofReal (w := w) u) ∧
     ∑ j, ct j * y j = ∑ i, u i * x i
 
 /-- `trX` and `trY` are correct transpose rules for the binary `f`, which is linear in both arguments
@@ -212,12 +229,14 @@ of the shapes of the inputs, and pairing a cotangent `ct` with `f x y`
 equals pairing `trX ct` with `x` plus pairing `trY ct` with `y`.
 The cotangent comes first, as in the rules of `ad.primitive_transposes`. -/
 def IsTranspose₂Of {sx : Shape m} {sy : Shape m'} {sx' : Shape k} {sy' : Shape k'} {t : Shape n}
-    (trX : Tensor (Index t) → Tensor (Index sx')) (trY : Tensor (Index t) → Tensor (Index sy'))
-    (f : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index t)) : Prop :=
+    (trX : Tensor (.float w) (Index t) → Tensor d₁ (Index sx'))
+    (trY : Tensor (.float w) (Index t) → Tensor d₂ (Index sy'))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)) :
+    Prop :=
   ∀ (ct : Index t → ℝ) (x : Index sx → ℝ) (y : Index sy → ℝ),
     ∃ (z : Index t → ℝ) (u : Index sx → ℝ) (v : Index sy → ℝ),
-    f (ofReal x) (ofReal y) = ofReal z ∧ (trX (ofReal ct)).Same (ofReal u) ∧
-    (trY (ofReal ct)).Same (ofReal v) ∧ ∑ j, ct j * z j = ∑ i, u i * x i + ∑ i, v i * y i
+    f (ofReal x) (ofReal y) = ofReal z ∧ (trX (ofReal ct)).Same (ofReal (w := wx) u) ∧
+    (trY (ofReal ct)).Same (ofReal (w := wy) v) ∧ ∑ j, ct j * z j = ∑ i, u i * x i + ∑ i, v i * y i
 
 /-- `tr` is a correct transpose rule for the binary `f`, which is linear in both arguments together,
 whichever of its arguments are linear inputs.
@@ -233,10 +252,13 @@ whenever some argument is a linear input, the rule does not raise
 and returns `trX ct` and `trY ct` for the arguments that are linear inputs. -/
 def IsPartialTranspose₂Of {sx : Shape m} {sy : Shape m'} {sx' : Shape k} {sy' : Shape k'}
     {t : Shape n}
-    (tr : Tensor (Index t) → Option (Tensor (Index sx)) → Option (Tensor (Index sy)) →
-      Option (Option (Tensor (Index sx')) × Option (Tensor (Index sy'))))
-    (f : Tensor (Index sx) → Tensor (Index sy) → Tensor (Index t)) : Prop :=
-  ∃ (trX : Tensor (Index t) → Tensor (Index sx')) (trY : Tensor (Index t) → Tensor (Index sy')),
+    (tr : Tensor (.float w) (Index t) → Option (Tensor (.float wx) (Index sx)) →
+      Option (Tensor (.float wy) (Index sy)) →
+      Option (Option (Tensor d₁ (Index sx')) × Option (Tensor d₂ (Index sy'))))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)) :
+    Prop :=
+  ∃ (trX : Tensor (.float w) (Index t) → Tensor d₁ (Index sx'))
+    (trY : Tensor (.float w) (Index t) → Tensor d₂ (Index sy')),
     IsTranspose₂Of trX trY f ∧
     ∀ (ct : Index t → ℝ) x y, x = none ∨ y = none →
       ∃ u v, tr (ofReal ct) x y = some (u, v) ∧
@@ -251,32 +273,33 @@ A rule of `pe.forwarding_rules`, `jax/_src/interpreters/partial_eval.py:1648`,
 looks at the parameters and input shapes of an equation, not at the input values.
 For each output it returns the index of an input that replaces it, or `None`.
 For a unary primitive, `true` is `[0]` and `false` is `[None]`. -/
-def IsFwdOf {s : Shape m} {t : Shape n} (fwd : Bool) (f : Tensor (Index s) → Tensor (Index t)) :
+def IsFwdOf {s : Shape m} {t : Shape n} (fwd : Bool) (f : Tensor d (Index s) → Tensor d' (Index t)) :
     Prop :=
-  fwd → ∀ x : Tensor (Index s), x.Same (f x)
+  fwd → ∀ x : Tensor d (Index s), x.Same (f x)
 
 /-! ## Arrays of any shape -/
 
-/-- An array of any rank and shape, as Python code holds it.
+/-- An array of any rank, shape and dtype, as Python code holds it.
 A rule that branches on the shapes of its arguments is a function of such arrays
 that returns an `Option`: `none` is a raised exception. -/
 structure Arr where
   {rank : ℕ}
   shape : Shape rank
-  val : Tensor (Index shape)
+  {dtype : DType}
+  val : Tensor dtype (Index shape)
 
 /-- `np.shape(a)` -/
 def Arr.shapeList (a : Arr) : List ℕ := List.ofFn a.shape
 
-/-- `a` and `b` are the same array. -/
+/-- `a` and `b` are the same array, of the same dtype. -/
 def Arr.Same (a b : Arr) : Prop := Tensor.Same a.val b.val
 
 /-- Entry `i` of `a` along `axis`: the array `a[:, …, i, …, :]`, which has one axis less.
 `none` if `a` has no axis `axis` or the axis has no entry `i`. -/
 def Arr.unbatch (a : Arr) (axis i : ℕ) : Option Arr :=
   match a with
-  | @Arr.mk 0 _ _ => none
-  | @Arr.mk (n + 1) shape val =>
+  | @Arr.mk 0 _ _ _ => none
+  | @Arr.mk (n + 1) shape _ val =>
     if h : axis < n + 1 then
       if hi : i < shape ⟨axis, h⟩ then
         some ⟨Fin.removeNth ⟨axis, h⟩ shape,
@@ -331,22 +354,30 @@ def IsBatchOf₃ (rule : Batched → Batched → Batched → Option Batched)
 
 /-! ## Lemmas -/
 
-theorem ofReal_injective {ι : Type} : Function.Injective (ofReal (ι := ι)) :=
+theorem ofReal_injective {ι : Type} : Function.Injective (ofReal (w := w) (ι := ι)) :=
   fun _ _ h => funext fun i => Scalar.fin.inj (congrFun h i)
 
-theorem Tensor.Same.of_eq {s : Shape n} {a b : Tensor (Index s)} (h : a = b) : a.Same b :=
-  ⟨rfl, fun _ => rfl, fun i j hij => by rw [h, Index.ext_val (j := j) hij]⟩
+theorem Tensor.Same.of_eq {s : Shape n} {a b : Tensor d (Index s)} (h : a = b) : a.Same b :=
+  ⟨rfl, rfl, fun _ => rfl, fun i j hij => by rw [h, Index.ext_val (j := j) hij]; rfl⟩
 
-/-- Arrays of equal rank are the same if their shapes and entries agree. -/
-theorem Tensor.same_of_shape_eq {s t : Shape n} {a : Tensor (Index s)} {b : Tensor (Index t)}
-    (hs : ∀ d, s d = t d) (hv : ∀ i j, (∀ d, (i d : ℕ) = j d) → a i = b j) : a.Same b :=
-  ⟨rfl, hs, hv⟩
+/-- Arrays of equal dtype and rank are the same if their shapes and entries agree. -/
+theorem Tensor.same_of_shape_eq {s t : Shape n} {a : Tensor d (Index s)} {b : Tensor d (Index t)}
+    (hs : ∀ e, s e = t e) (hv : ∀ i j, (∀ e, (i e : ℕ) = j e) → a i = b j) : a.Same b :=
+  ⟨rfl, rfl, hs, hv⟩
 
-/-- An array is the same as at most one array of a given shape. -/
-theorem Tensor.Same.unique {s : Shape m} {t : Shape n} {a : Tensor (Index s)}
-    {b c : Tensor (Index t)} (hb : a.Same b) (hc : a.Same c) : b = c := by
-  obtain ⟨rfl, hs, hv⟩ := hb
-  obtain ⟨_, _, hv'⟩ := hc
+/-- Entries of the same arrays of the same dtype agree. -/
+theorem Tensor.Same.apply_eq {s : Shape m} {t : Shape n} {a : Tensor d (Index s)}
+    {b : Tensor d (Index t)} (h : a.Same b) :
+    ∃ hmn : m = n, (∀ e, s e = t (Fin.cast hmn e)) ∧
+      ∀ i j, (∀ e, (i e : ℕ) = j (Fin.cast hmn e)) → a i = b j := by
+  obtain ⟨_, hmn, hs, hv⟩ := h
+  exact ⟨hmn, hs, hv⟩
+
+/-- An array is the same as at most one array of a given dtype and shape. -/
+theorem Tensor.Same.unique {s : Shape m} {t : Shape n} {a : Tensor d (Index s)}
+    {b c : Tensor d' (Index t)} (hb : a.Same b) (hc : a.Same c) : b = c := by
+  obtain ⟨rfl, rfl, hs, hv⟩ := hb
+  obtain ⟨_, _, _, hv'⟩ := hc
   funext j
   let i : Index s := fun d => ⟨j d, by rw [hs d]; exact (j d).isLt⟩
   exact (hv i j fun _ => rfl).symm.trans (hv' i j fun _ => rfl)
@@ -364,7 +395,7 @@ theorem sum_filter_index_congr {s t : Shape n} (hst : ∀ d, s d = t d) {P : Ind
     if_congr (hPQ i _ fun _ => rfl) (hfg i _ fun _ => rfl) rfl
 
 /-- Entry `i` of an array along its axis `p`. -/
-theorem Arr.unbatch_mk (shape : Shape (n + 1)) (val : Tensor (Index shape)) (p : Fin (n + 1))
+theorem Arr.unbatch_mk (shape : Shape (n + 1)) (val : Tensor d (Index shape)) (p : Fin (n + 1))
     {i : ℕ} (hi : i < shape p) :
     Arr.unbatch ⟨shape, val⟩ p i = some ⟨Fin.removeNth p shape,
       fun j => val (Fin.insertNth (α := fun d => Fin (shape d)) p ⟨i, hi⟩ j)⟩ := by
@@ -373,7 +404,8 @@ theorem Arr.unbatch_mk (shape : Shape (n + 1)) (val : Tensor (Index shape)) (p :
 /-- A linear primitive is its own JVP rule.
 `ad.deflinear2` registers `linear_jvp`, `jax/_src/interpreters/ad.py:942`,
 which applies the primitive to the tangent: `primitive.bind(*tangents, **params)`. -/
-theorem isJvpOf_of_linear {s : Shape m} {t : Shape n} {f : Tensor (Index s) → Tensor (Index t)}
+theorem isJvpOf_of_linear {s : Shape m} {t : Shape n}
+    {f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t)}
     (F : (Index s → ℝ) →ₗ[ℝ] Index t → ℝ) (hF : ∀ x, f (ofReal x) = ofReal (F x)) :
     IsJvpOf (fun g _ => f g) f := by
   intro x _
@@ -384,8 +416,8 @@ theorem isJvpOf_of_linear {s : Shape m} {t : Shape n} {f : Tensor (Index s) → 
 near `x`, every entry of `f` computes a real function that is differentiable at `x`,
 and the entry of `jvp` is its derivative applied to the tangent. -/
 theorem isJvpOfOn_of_apply {s : Shape m} {t : Shape n}
-    {jvp : Tensor (Index s) → Tensor (Index s) → Tensor (Index t)}
-    {f : Tensor (Index s) → Tensor (Index t)} {dom : Set (Index s → ℝ)}
+    {jvp : Tensor (.float w) (Index s) → Tensor (.float w) (Index s) → Tensor (.float w') (Index t)}
+    {f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t)} {dom : Set (Index s → ℝ)}
     (h : ∀ x ∈ dom, ∀ g j, ∃ (Φ : (Index s → ℝ) → ℝ) (Φ' : (Index s → ℝ) →L[ℝ] ℝ),
       (∀ᶠ y in nhds x, f (ofReal y) j = .fin (Φ y)) ∧ HasFDerivAt Φ Φ' x ∧
         jvp (ofReal g) (ofReal x) j = .fin (Φ' g)) :

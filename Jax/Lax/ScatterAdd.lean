@@ -33,7 +33,7 @@ and neither are `scatter`, `scatter_mul`, `scatter_min` and `scatter_max`.
 
 namespace Jax.Lax
 
-variable {n ni nu : ℕ} {so : Shape n} {si : Shape ni} {su : Shape nu}
+variable {n ni nu : ℕ} {so : Shape n} {si : Shape ni} {su : Shape nu} {w : FloatWidth} {wi : IntWidth}
 
 /-! ## Rules -/
 
@@ -62,9 +62,9 @@ def _scatter_addsub_jvp(
 ``` -/
 def scatterAddJvp (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
     (h : ScatterValid so si su dimensionNumbers)
-    (gOperand : Tensor (Index so)) (gUpdates : Tensor (Index su))
-    (_operand : Tensor (Index so)) (indices : Index si → ℤ) (_updates : Tensor (Index su)) :
-    Tensor (Index so) :=
+    (gOperand : Tensor (.float w) (Index so)) (gUpdates : Tensor (.float w) (Index su))
+    (_operand : Tensor (.float w) (Index so)) (indices : Tensor (.int wi) (Index si)) (_updates : Tensor (.float w) (Index su)) :
+    Tensor (.float w) (Index so) :=
   scatterAdd dimensionNumbers mode h gOperand indices gUpdates
 
 /-- The transpose rule of `scatter_add`.
@@ -109,9 +109,9 @@ def _scatter_addsub_transpose_rule(
   return [operand_t, None, update_t]
 ``` -/
 def scatterAddTranspose (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (t : Tensor (Index so)) (operand : Option (Tensor (Index so))) (indices : Index si → ℤ)
-    (updates : Option (Tensor (Index su))) :
-    Option (Option (Tensor (Index so)) × Option (Tensor (Index
+    (t : Tensor (.float w) (Index so)) (operand : Option (Tensor (.float w) (Index so))) (indices : Tensor (.int wi) (Index si))
+    (updates : Option (Tensor (.float w) (Index su))) :
+    Option (Option (Tensor (.float w) (Index so)) × Option (Tensor (.float w) (Index
       (gatherShape si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers))))) :=
   let operandT := if operand.isNone then some t else none
   if updates.isNone then
@@ -177,7 +177,7 @@ theorem scatterSliceSizes_getD (dn : ScatterDimensionNumbers) (d : Fin n) :
 the clamped windows lie inside the operand.
 An update is dropped if an inserted axis is empty, as in `bugs/scatter-add-transpose-empty-operand.json`. -/
 theorem gatherIndex_scatter_isSome {dn : ScatterDimensionNumbers} (h : ScatterValid so si su dn)
-    (hins : ∀ d ∈ dn.insertedWindowDims, so.sizeD d ≠ 0) (indices : Index si → ℤ) (u : Index su) :
+    (hins : ∀ d ∈ dn.insertedWindowDims, so.sizeD d ≠ 0) (indices : Tensor (.int wi) (Index si)) (u : Index su) :
     (gatherIndex so si dn.toGather (scatterSliceSizes n su dn) true indices u.val).isSome := by
   have hW := h.length_windowDims
   obtain ⟨-, hnu, ho, hor, -, -, -, -, -, hsb, -, hsr, -, hmap, -, -, -, -, hwin, -⟩ := h
@@ -244,7 +244,7 @@ theorem Index.val_eq_of_same {m m' : ℕ} {s : Shape m} {t : Shape m'} (hm : m =
 
 /-- The real function that `scatter_add` computes. -/
 noncomputable def scatterAddReal (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (indices : Index si → ℤ) : (Index so → ℝ) × (Index su → ℝ) →ₗ[ℝ] Index so → ℝ where
+    (indices : Tensor (.int wi) (Index si)) : (Index so → ℝ) × (Index su → ℝ) →ₗ[ℝ] Index so → ℝ where
   toFun p k := p.1 k + ∑ u with gatherIndex so si dn.toGather (scatterSliceSizes n su dn)
     (mode == .clip) indices u.val = some k, p.2 u
   map_add' p q := by
@@ -257,8 +257,8 @@ noncomputable def scatterAddReal (dn : ScatterDimensionNumbers) (mode : GatherSc
     rw [mul_add, Finset.mul_sum]
 
 theorem scatterAdd_ofReal (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (h : ScatterValid so si su dn) (indices : Index si → ℤ) (x : Index so → ℝ) (y : Index su → ℝ) :
-    scatterAdd dn mode h (ofReal x) indices (ofReal y) =
+    (h : ScatterValid so si su dn) (indices : Tensor (.int wi) (Index si)) (x : Index so → ℝ) (y : Index su → ℝ) :
+    scatterAdd (w := w) dn mode h (ofReal x) indices (ofReal y) =
       ofReal (scatterAddReal dn mode indices (x, y)) := by
   funext k
   simp only [scatterAdd, ofReal, ← Scalar.fin_sum]
@@ -268,9 +268,9 @@ theorem scatterAdd_ofReal (dn : ScatterDimensionNumbers) (mode : GatherScatterMo
 
 /-- The JVP rule of `scatter_add` computes the derivative of `scatter_add`. -/
 theorem scatterAddJvp_correct (dn : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (h : ScatterValid so si su dn) (indices : Index si → ℤ) :
+    (h : ScatterValid so si su dn) (indices : Tensor (.int wi) (Index si)) :
     IsJointJvp₂Of (fun g k x y => scatterAddJvp dn mode h g k x indices y)
-      (fun x y => scatterAdd dn mode h x indices y) := by
+      (fun x y => scatterAdd (w := w) dn mode h x indices y) := by
   intro x y _
   let L := LinearMap.toContinuousLinearMap (scatterAddReal (so := so) (su := su) dn mode indices)
   exact ⟨scatterAddReal dn mode indices, L,
@@ -283,10 +283,10 @@ theorem scatterAdd_isTranspose₂Of (dn : ScatterDimensionNumbers) (mode : Gathe
     (h : ScatterValid so si su dn)
     (hg : GatherValid so si dn.toGather (scatterSliceSizes n su dn))
     (hgl : GatherLowers so si dn.toGather (scatterSliceSizes n su dn))
-    (indices : Index si → ℤ) (hm : mode ≠ .promiseInBounds) :
+    (indices : Tensor (.int wi) (Index si)) (hm : mode ≠ .promiseInBounds) :
     IsTranspose₂Of id
-      (fun t => gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl t indices)
-      (fun x y => scatterAdd dn mode h x indices y) := by
+      (fun t => gather (w := w) dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl t indices)
+      (fun x y => scatterAdd (w := w) dn mode h x indices y) := by
   intro ct x y
   · let Q : Index su → Option (Index so) := fun u =>
       gatherIndex so si dn.toGather (scatterSliceSizes n su dn) (mode == .clip) indices u.val
@@ -294,7 +294,7 @@ theorem scatterAdd_isTranspose₂Of (dn : ScatterDimensionNumbers) (mode : Gathe
       cases mode <;> first | rfl | exact absurd rfl hm
     have hrank : dn.updateWindowDims.length + (ni - 1) = nu := by have := h.2.1; omega
     refine ⟨scatterAddReal dn mode indices (x, y), ct, fun u => (Q u).elim 0 ct,
-      scatterAdd_ofReal dn mode h indices x y, .of_eq rfl, ⟨hrank, fun d => ?_, fun i j hij => ?_⟩, ?_⟩
+      scatterAdd_ofReal dn mode h indices x y, .of_eq rfl, ⟨rfl, hrank, fun d => ?_, fun i j hij => ?_⟩, ?_⟩
     · rw [gatherShape_scatterSliceSizes h d]
       exact Shape.sizeD_of_lt su (by omega)
     · show (match gatherIndex so si dn.toGather (scatterSliceSizes n su dn)
@@ -320,9 +320,9 @@ theorem scatterAddTranspose_correct (dn : ScatterDimensionNumbers) (mode : Gathe
     (h : ScatterValid so si su dn)
     (hg : GatherValid so si dn.toGather (scatterSliceSizes n su dn))
     (hgl : GatherLowers so si dn.toGather (scatterSliceSizes n su dn))
-    (indices : Index si → ℤ) (hm : mode ≠ .promiseInBounds) :
+    (indices : Tensor (.int wi) (Index si)) (hm : mode ≠ .promiseInBounds) :
     IsPartialTranspose₂Of (fun t x y => scatterAddTranspose dn mode t x indices y)
-      (fun x y => scatterAdd dn mode h x indices y) := by
+      (fun x y => scatterAdd (w := w) dn mode h x indices y) := by
   refine ⟨id, fun t => gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl t indices,
     scatterAdd_isTranspose₂Of dn mode h hg hgl indices hm, fun ct x y hxy => ?_⟩
   · refine ⟨if x.isNone then some (ofReal ct) else none,
@@ -334,12 +334,13 @@ theorem scatterAddTranspose_correct (dn : ScatterDimensionNumbers) (mode : Gathe
 here the operand has shape `(0,)`, as in `jnp.zeros(0).at[jnp.array([0])].add(updates)`.
 `scatter_add` accepts it and drops the update, but the `gather` of the rule has slice size 1
 on the axis of size 0, which its shape rule rejects. -/
-theorem scatterAddTranspose_not_correct (mode : GatherScatterMode) (indices : Index ![1, 1] → ℤ) :
+theorem scatterAddTranspose_not_correct (mode : GatherScatterMode)
+    (indices : Tensor (.int wi) (Index ![1, 1])) :
     ¬ IsPartialTranspose₂Of
       (fun t x y => scatterAddTranspose (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode t x
         indices y)
-      (fun x y => scatterAdd (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode (by decide) x
-        indices y) := by
+      (fun x y => scatterAdd (w := w) (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode
+        (by decide) x indices y) := by
   rintro ⟨_, _, _, hrule⟩
   obtain ⟨_, _, hsome, _⟩ := hrule 0 (some 0) none (.inr rfl)
   have hno : ¬ (GatherValid ![0] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)
@@ -354,10 +355,10 @@ and the `gather` of the rule clamps it.
 Here the operand has shape `(2,)`, and the index 5 reads the cotangent of its last entry. -/
 theorem scatterAddTranspose_promiseInBounds_not_correct :
     ¬ IsPartialTranspose₂Of
-      (fun t x y => scatterAddTranspose (so := ![2]) (su := ![1]) ⟨[], [0], [0], [], []⟩
+      (fun t x y => scatterAddTranspose (wi := wi) (so := ![2]) (su := ![1]) ⟨[], [0], [0], [], []⟩
         .promiseInBounds t x (fun _ : Index ![1, 1] => 5) y)
-      (fun x y => scatterAdd (so := ![2]) (su := ![1]) ⟨[], [0], [0], [], []⟩ .promiseInBounds
-        (by decide) x (fun _ : Index ![1, 1] => 5) y) := by
+      (fun x y => scatterAdd (w := w) (wi := wi) (so := ![2]) (su := ![1]) ⟨[], [0], [0], [], []⟩
+        .promiseInBounds (by decide) x (fun _ : Index ![1, 1] => 5) y) := by
   rintro ⟨trX, trY, htr, hrule⟩
   have hread : ∀ j : Index (gatherShape ![1, 1]
       (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)
@@ -376,12 +377,12 @@ theorem scatterAddTranspose_promiseInBounds_not_correct :
   obtain ⟨u, v, hsome, -, hv⟩ := hrule (fun _ => 1) (some 0) none (.inr rfl)
   obtain ⟨z, a, b, hz, -, hb, hsum⟩ := htr (fun _ => 1) 0 (fun _ => 1)
   -- The rule returns the `gather` of the cotangent, which reads the cotangent 1 of the last entry.
-  have hgather : (trY (ofReal fun _ => 1)).Same (ofReal fun _ : Index ![1] => (1 : ℝ)) := by
+  have hgather : (trY (ofReal fun _ => 1)).Same (ofReal (w := w) fun _ : Index ![1] => (1 : ℝ)) := by
     simp only [scatterAddTranspose, Option.isNone_none, ↓reduceIte, hyes, and_self, ↓reduceDIte,
       Option.some.injEq, Prod.mk.injEq] at hsome
     have hrw := Option.some.inj ((hv rfl).symm.trans hsome.2.symm)
     rw [hrw]
-    refine ⟨rfl, by decide, fun i j _ => ?_⟩
+    refine ⟨rfl, rfl, by decide, fun i j _ => ?_⟩
     obtain ⟨k, hk⟩ := Option.isSome_iff_exists.1 (hread i)
     simp only [gather]
     rw [show (GatherScatterMode.promiseInBounds != .fillOrDrop) = true from rfl, hk]

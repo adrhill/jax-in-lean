@@ -25,7 +25,7 @@ The batching rule raises if only `max` is batched and `min` and `x` are scalars
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 theorem whichShape_self (s : Shape n) : WhichShape s s := .inr rfl
 
@@ -43,7 +43,7 @@ lambda g, min, operand, max:
 select(bitwise_and(gt(min, operand), lt(min, max)),
        g, _zeros(operand))
 ``` -/
-noncomputable def clampJvpMin (g lo x hi : Tensor (Index s)) : Tensor (Index s) :=
+noncomputable def clampJvpMin (g lo x hi : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) :=
   selectN rfl (whichShape_broadcastShape_broadcastShape s)
     (bitwiseAnd (.refl _) (gt (.refl s) lo x) (lt (.refl s) lo hi)) 0 g
 
@@ -54,7 +54,7 @@ lambda g, min, operand, max:
 select(bitwise_and(gt(operand, min), lt(operand, max)),
        g, _zeros(operand))
 ``` -/
-noncomputable def clampJvpOperand (g lo x hi : Tensor (Index s)) : Tensor (Index s) :=
+noncomputable def clampJvpOperand (g lo x hi : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) :=
   selectN rfl (whichShape_broadcastShape_broadcastShape s)
     (bitwiseAnd (.refl _) (gt (.refl s) x lo) (lt (.refl s) x hi)) 0 g
 
@@ -64,7 +64,7 @@ noncomputable def clampJvpOperand (g lo x hi : Tensor (Index s)) : Tensor (Index
 lambda g, min, operand, max:
 select(lt(max, operand), g, _zeros(operand))
 ``` -/
-noncomputable def clampJvpMax (g _lo x hi : Tensor (Index s)) : Tensor (Index s) :=
+noncomputable def clampJvpMax (g _lo x hi : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) :=
   selectN rfl (whichShape_broadcastShape_self s) (lt (.refl s) hi x) 0 g
 
 /-! ## Scalar bounds -/
@@ -83,8 +83,8 @@ lambda g, min, operand, max:
 select(bitwise_and(gt(min, operand), lt(min, max)),
        g, _zeros(operand))
 ``` -/
-noncomputable def clampJvpMinScalar (hc : List.ofFn sl = List.ofFn s) (g lo : Tensor (Index sl))
-    (x : Tensor (Index s)) (hi : Tensor (Index sh)) : Tensor (Index s) :=
+noncomputable def clampJvpMinScalar (hc : List.ofFn sl = List.ofFn s) (g lo : Tensor (.float w) (Index sl))
+    (x : Tensor (.float w) (Index s)) (hi : Tensor (.float w) (Index sh)) : Tensor (.float w) (Index s) :=
   selectN hc (whichShape_self s)
     (binopScalarRight (· && ·) (binopScalarLeft (fun a b => decide (a.gt b)) lo x)
       (lt (fun d => d.elim0) lo hi)) 0 g
@@ -98,8 +98,8 @@ The proof `hc` is the shape check of `select` that its cases `g` and `_zeros(ope
 lambda g, min, operand, max:
 select(lt(max, operand), g, _zeros(operand))
 ``` -/
-noncomputable def clampJvpMaxScalar (hc : List.ofFn sh = List.ofFn s) (g : Tensor (Index sh))
-    (_lo : Tensor (Index sl)) (x : Tensor (Index s)) (hi : Tensor (Index sh)) : Tensor (Index s) :=
+noncomputable def clampJvpMaxScalar (hc : List.ofFn sh = List.ofFn s) (g : Tensor (.float w) (Index sh))
+    (_lo : Tensor (.float w) (Index sl)) (x : Tensor (.float w) (Index s)) (hi : Tensor (.float w) (Index sh)) : Tensor (.float w) (Index s) :=
   selectN hc (whichShape_self s) (binopScalarLeft (fun a b => decide (a.lt b)) hi x) 0 g
 
 /-- The shape check of the rules of `clamp` for scalar `min` and `max`
@@ -134,7 +134,7 @@ private theorem unbroadcast_val_eq {t u : Shape n} (h : BroadcastsTo t u) (ht : 
   split_ifs <;> omega
 
 /-- A comparison of arrays of equal shape at an index with the values of `j`. -/
-private theorem binop_refl_at {α : Type} (op : Scalar → Scalar → α) (a b : Tensor (Index s))
+private theorem binop_refl_at {d : DType} (op : Scalar w → Scalar w → d.Elem) (a b : Tensor (.float w) (Index s))
     (v : Index (broadcastShape s s)) (j : Index s) (hv : ∀ d, (v d : ℕ) = j d) :
     binop op (.refl s) a b v = op (a j) (b j) := by
   unfold binop
@@ -152,14 +152,14 @@ private theorem bitwiseAnd_at (p q : Index (broadcastShape s s) → Bool)
     hq _ v fun d => unbroadcast_val_eq _ (fun _ => rfl) w v hw d]
 
 /-- A comparison of arrays of equal shape depends only on the values of the index. -/
-private theorem binop_refl_congr {α : Type} (op : Scalar → Scalar → α) (a b : Tensor (Index s))
+private theorem binop_refl_congr {d : DType} (op : Scalar w → Scalar w → d.Elem) (a b : Tensor (.float w) (Index s))
     (v v' : Index (broadcastShape s s)) (h : ∀ d, (v d : ℕ) = v' d) :
     binop op (.refl s) a b v = binop op (.refl s) a b v' := by
   rw [Index.ext_val h]
 
 open scoped Classical in
 /-- The predicate of the rules for `min` and `operand` at the index `j` of the result. -/
-private theorem and_at (a b c e : Tensor (Index s)) (j : Index s) :
+private theorem and_at (a b c e : Tensor (.float w) (Index s)) (j : Index s) :
     bitwiseAnd (.refl _) (gt (.refl s) a b) (lt (.refl s) c e)
       (Index.ofWhich (whichShape_broadcastShape_broadcastShape s) j) =
       (decide ((a j).gt (b j)) && decide ((c j).lt (e j))) := by
@@ -171,7 +171,7 @@ private theorem and_at (a b c e : Tensor (Index s)) (j : Index s) :
   simp only [gt, lt, binop_refl_at _ _ _ v j hv]
 
 open scoped Classical in
-private theorem lt_at (a b : Tensor (Index s)) (j : Index s) :
+private theorem lt_at (a b : Tensor (.float w) (Index s)) (j : Index s) :
     lt (.refl s) a b (Index.ofWhich (whichShape_broadcastShape_self s) j) =
       decide ((a j).lt (b j)) :=
   binop_refl_at _ _ _ _ j (ofWhich_val _ j)
@@ -181,14 +181,14 @@ private theorem ofWhich_self (j : Index s) : Index.ofWhich (whichShape_self s) j
 
 /-- `clamp` on finite arrays. -/
 theorem clamp_ofReal (lo x hi : Index s → ℝ) :
-    clamp (whichShape_self s) (whichShape_self s) (ofReal lo) (ofReal x) (ofReal hi) =
+    clamp (w := w) (whichShape_self s) (whichShape_self s) (ofReal lo) (ofReal x) (ofReal hi) =
       ofReal fun j => (x j ⊔ lo j) ⊓ hi j := by
   funext j
   simp [clamp, ofReal, ofWhich_self]
 
 /-- The rule for `min` on finite arrays. -/
 theorem clampJvpMin_ofReal (g lo x hi : Index s → ℝ) :
-    clampJvpMin (ofReal g) (ofReal lo) (ofReal x) (ofReal hi) =
+    clampJvpMin (w := w) (ofReal g) (ofReal lo) (ofReal x) (ofReal hi) =
       ofReal fun j => if x j < lo j ∧ lo j < hi j then g j else 0 := by
   funext j
   simp only [clampJvpMin, selectN, and_at]
@@ -197,7 +197,7 @@ theorem clampJvpMin_ofReal (g lo x hi : Index s → ℝ) :
 
 /-- The rule for `operand` on finite arrays. -/
 theorem clampJvpOperand_ofReal (g lo x hi : Index s → ℝ) :
-    clampJvpOperand (ofReal g) (ofReal lo) (ofReal x) (ofReal hi) =
+    clampJvpOperand (w := w) (ofReal g) (ofReal lo) (ofReal x) (ofReal hi) =
       ofReal fun j => if lo j < x j ∧ x j < hi j then g j else 0 := by
   funext j
   simp only [clampJvpOperand, selectN, and_at]
@@ -206,7 +206,7 @@ theorem clampJvpOperand_ofReal (g lo x hi : Index s → ℝ) :
 
 /-- The rule for `max` on finite arrays. -/
 theorem clampJvpMax_ofReal (g lo x hi : Index s → ℝ) :
-    clampJvpMax (ofReal g) (ofReal lo) (ofReal x) (ofReal hi) =
+    clampJvpMax (w := w) (ofReal g) (ofReal lo) (ofReal x) (ofReal hi) =
       ofReal fun j => if hi j < x j then g j else 0 := by
   funext j
   simp only [clampJvpMax, selectN, lt_at]
@@ -245,8 +245,8 @@ where, in every entry, `x > hi`, or `lo < x < hi`, or `x < lo < hi`.
 `clamp` is differentiable at every other point where `x ≤ hi < lo` in some entry,
 and there the rules are wrong (`clampJvp_not_correct`). -/
 theorem clampJvp_correct :
-    IsJvp₃OfOn (clampJvpMin (s := s)) clampJvpOperand clampJvpMax
-      (clamp (whichShape_self s) (whichShape_self s))
+    IsJvp₃OfOn (clampJvpMin (s := s) (w := w)) clampJvpOperand clampJvpMax
+      (clamp (w := w) (whichShape_self s) (whichShape_self s))
       {p | ∀ j, p.2.2 j < p.2.1 j ∨ (p.1 j < p.2.1 j ∧ p.2.1 j < p.2.2 j) ∨
         (p.2.1 j < p.1 j ∧ p.1 j < p.2.2 j)} := by
   intro lo x hi hdom
@@ -334,8 +334,8 @@ but the rule for `max` returns zero there because `hi < x` is false,
 and the rule for `min` returns zero because `lo < hi` is false.
 The counterexample has shape `(1,)`, `lo = 2`, `x = -1` and `hi = 0`. -/
 theorem clampJvp_not_correct :
-    ¬ IsJvp₃Of (clampJvpMin (s := ![1])) clampJvpOperand clampJvpMax
-      (clamp (whichShape_self ![1]) (whichShape_self ![1])) := by
+    ¬ IsJvp₃Of (clampJvpMin (s := ![1]) (w := w)) clampJvpOperand clampJvpMax
+      (clamp (w := w) (whichShape_self ![1]) (whichShape_self ![1])) := by
   intro hc
   have hpt : ∀ j : Index ![1], (fun _ => (-1 : ℝ)) j < (fun _ => (0 : ℝ)) j ∧
       (fun _ => (0 : ℝ)) j < (fun _ => (2 : ℝ)) j := fun _ => by norm_num
@@ -440,8 +440,8 @@ so `clamp` gets a scalar operand and a `max` of shape `(size,)`.
 The counterexample has a batch of size 1. -/
 theorem clampBatch_not_correct : ¬ IsBatchOf₃ clampBatch Arr.clamp := by
   intro h
-  let scalar : Arr := ⟨(![] : Shape 0), 0⟩
-  let batch : Arr := ⟨(![1] : Shape 1), 0⟩
+  let scalar : Arr := ⟨(![] : Shape 0), (0 : Tensor .f32 _)⟩
+  let batch : Arr := ⟨(![1] : Shape 1), (0 : Tensor .f32 _)⟩
   obtain ⟨y, hy, -⟩ := h 1 ⟨scalar, none⟩ ⟨scalar, none⟩ ⟨batch, some 0⟩ Nat.one_pos
     (by simp [Batched.HasSize]) (by simp [Batched.HasSize])
     (by simp [Batched.HasSize, batch]) (by simp) (fun i hi => by

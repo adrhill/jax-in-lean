@@ -18,7 +18,7 @@ There `x ↦ x ^ 0` is the constant `1`, but the rule returns `0 * 0 ^ (-1) = 0 
 
 namespace Jax.Lax
 
-variable {n : ℕ} {sx sy : Shape n}
+variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth}
 
 theorem broadcastable_powJvpLeft₁ (h : Broadcastable sx sy) :
     Broadcastable sx (broadcastShape sy sy) :=
@@ -55,9 +55,9 @@ def _pow_jvp_lhs(g, ans, x, y):
     jac = mul(y, pow(x, sub(y, _ones(y))))
   return mul(g, jac)
 ``` -/
-noncomputable def powJvpLeft (h : Broadcastable sx sy) (g : Tensor (Index sx))
-    (_ans : Tensor (Index (broadcastShape sx sy))) (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx (broadcastShape sy (broadcastShape sx (broadcastShape sy sy))))) :=
+noncomputable def powJvpLeft (h : Broadcastable sx sy) (g : Tensor (.float w) (Index sx))
+    (_ans : Tensor (.float w) (Index (broadcastShape sx sy))) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx (broadcastShape sy (broadcastShape sx (broadcastShape sy sy))))) :=
   mul (broadcastable_powJvpLeft₃ h) g
     (mul (broadcastable_powJvpLeft₂ h) y
       (pow (broadcastable_powJvpLeft₁ h) x (sub (.refl sy) y fun _ => 1)))
@@ -72,21 +72,21 @@ def _pow_jvp_rhs(g, ans, x, y):
   assert dtypes.issubdtype(y_dtype, np.inexact)
   return convert_element_type(mul(g, mul(log(_replace_zero(x)), ans)), y_dtype)
 ``` -/
-noncomputable def powJvpRight (h : Broadcastable sx sy) (g : Tensor (Index sy))
-    (ans : Tensor (Index (broadcastShape sx sy))) (x : Tensor (Index sx)) (_y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sy (broadcastShape sx (broadcastShape sx sy)))) :=
+noncomputable def powJvpRight (h : Broadcastable sx sy) (g : Tensor (.float w) (Index sy))
+    (ans : Tensor (.float w) (Index (broadcastShape sx sy))) (x : Tensor (.float w) (Index sx)) (_y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sy (broadcastShape sx (broadcastShape sx sy)))) :=
   mul (broadcastable_powJvpRight h) g (mul (broadcastable_left sx sy) (log (replaceZero x)) ans)
 
 /-! ## Proofs -/
 
 /-- The left rule of `pow` on finite arrays where `pow(x, y - 1)` is finite. -/
 private theorem powJvpLeft_same (h : Broadcastable sx sy) (g : Index sx → ℝ)
-    (ans : Tensor (Index (broadcastShape sx sy))) (x : Index sx → ℝ) (y : Index sy → ℝ)
+    (ans : Tensor (.float w) (Index (broadcastShape sx sy))) (x : Index sx → ℝ) (y : Index sy → ℝ)
     (hxy : ∀ j : Index (broadcastShape sx sy),
-      (Scalar.fin (x (j.unbroadcast (broadcastsTo_left sx sy)))).pow
+      (Scalar.fin (w := w) (x (j.unbroadcast (broadcastsTo_left sx sy)))).pow
         (.fin (y (j.unbroadcast h.right) + -1)) =
       .fin (x (j.unbroadcast (broadcastsTo_left sx sy)) ^ (y (j.unbroadcast h.right) - 1))) :
-    (powJvpLeft h (ofReal g) ans (ofReal x) (ofReal y)).Same (ofReal fun j =>
+    (powJvpLeft h (ofReal g) ans (ofReal x) (ofReal y)).Same (ofReal (w := w) fun j =>
       g (j.unbroadcast (broadcastsTo_left sx sy)) * (y (j.unbroadcast h.right) *
         x (j.unbroadcast (broadcastsTo_left sx sy)) ^ (y (j.unbroadcast h.right) - 1))) := by
   refine Tensor.same_of_shape_eq (fun d => ?_) fun i j hij => ?_
@@ -100,15 +100,15 @@ private theorem powJvpLeft_same (h : Broadcastable sx sy) (g : Index sx → ℝ)
     rfl
 
 private theorem replaceZero_ofReal {ι : Type} (x : ι → ℝ) (i : ι) (hx : x i ≠ 0) :
-    replaceZero (ofReal x) i = .fin (x i) := by
+    replaceZero (ofReal (w := w) x) i = .fin (x i) := by
   simp [replaceZero, ofReal, Scalar.zero_def, hx]
 
 /-- The right rule of `pow` on finite arrays with a positive base. -/
 private theorem powJvpRight_same (h : Broadcastable sx sy) (k : Index sy → ℝ) (x : Index sx → ℝ)
     (y : Index sy → ℝ)
     (hx : ∀ j : Index (broadcastShape sx sy), 0 < x (j.unbroadcast (broadcastsTo_left sx sy))) :
-    (powJvpRight h (ofReal k) (pow h (ofReal x) (ofReal y)) (ofReal x) (ofReal y)).Same
-      (ofReal fun j =>
+    (powJvpRight h (ofReal k) (pow (w := w) h (ofReal x) (ofReal y)) (ofReal x) (ofReal y)).Same
+      (ofReal (w := w) fun j =>
       k (j.unbroadcast h.right) * (Real.log (x (j.unbroadcast (broadcastsTo_left sx sy))) *
         x (j.unbroadcast (broadcastsTo_left sx sy)) ^ y (j.unbroadcast h.right))) := by
   refine Tensor.same_of_shape_eq (fun d => ?_) fun i j hij => ?_
@@ -127,7 +127,7 @@ private theorem powJvpRight_same (h : Broadcastable sx sy) (k : Index sy → ℝ
 /-- The JVP rules of `pow` compute the derivative of `pow` where the base is positive. -/
 theorem powJvp_correct (h : Broadcastable sx sy) :
     IsJvp₂OfOn (fun g x y => powJvpLeft h g (pow h x y) x y)
-      (fun g x y => powJvpRight h g (pow h x y) x y) (pow h)
+      (fun g x y => powJvpRight h g (pow h x y) x y) (pow (w := w) h)
       {p | ∀ j : Index (broadcastShape sx sy), 0 < p.1 (j.unbroadcast (broadcastsTo_left sx sy))} := by
   intro x y hx
   let ux : Index (broadcastShape sx sy) → Index sx :=
@@ -162,7 +162,7 @@ where it is differentiable and finite near `x`, except at `x = 0` for `y = 0`:
 where `x > 0`, or where `y` is an integer and `x ≠ 0` or `y > 0`.
 The rule for `y` is not evaluated, because the tangent of a constant is a symbolic zero. -/
 theorem powJvpLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ) :
-    IsJvpOfOn (fun g x => powJvpLeft h g (pow h x (ofReal y)) x (ofReal y)) (pow h · (ofReal y))
+    IsJvpOfOn (fun g x => powJvpLeft h g (pow h x (ofReal y)) x (ofReal y)) (pow (w := w) h · (ofReal y))
       {x | ∀ j : Index (broadcastShape sx sy),
         0 < x (j.unbroadcast (broadcastsTo_left sx sy)) ∨
         (∃ k : ℤ, y (j.unbroadcast h.right) = k) ∧
@@ -174,7 +174,7 @@ theorem powJvpLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ) :
   -- On the domain, `pow` of finite values is the real power.
   have hfin : ∀ (a : ℝ) (j : Index (broadcastShape sx sy)),
       0 < a ∨ (∃ k : ℤ, y (uy j) = k) ∧ (a ≠ 0 ∨ 0 < y (uy j)) →
-      (Scalar.fin a).pow (.fin (y (uy j))) = .fin (a ^ y (uy j)) :=
+      (Scalar.fin (w := w) a).pow (.fin (y (uy j))) = .fin (a ^ y (uy j)) :=
     fun a j ha => Scalar.pow_fin (ha.imp_right fun ⟨hk, ha⟩ => ⟨hk, ha.imp_right le_of_lt⟩)
   refine ⟨fun z j => z (ux j) ^ y (uy j),
     ContinuousLinearMap.pi fun j => (y (uy j) * x (ux j) ^ (y (uy j) - 1)) •
@@ -195,7 +195,7 @@ theorem powJvpLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ) :
     · refine .inr ?_
       rw [hk] at hj ⊢
       exact_mod_cast (Int.cast_pos.1 hj : 0 < k)
-  · have hxy : ∀ j, (Scalar.fin (x (ux j))).pow (.fin (y (uy j) + -1)) =
+  · have hxy : ∀ j, (Scalar.fin (w := w) (x (ux j))).pow (.fin (y (uy j) + -1)) =
         .fin (x (ux j) ^ (y (uy j) - 1)) := fun j => by
       rw [← sub_eq_add_neg]
       refine Scalar.pow_fin ?_
@@ -219,15 +219,15 @@ theorem powJvpLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ) :
 but the rule computes `0 * 0 ^ (0 - 1) = 0 * ∞`, which is NaN. -/
 theorem powJvpLeft_not_correct :
     ¬ IsJvpOf (fun g x => powJvpLeft (.refl ![1]) g (pow (.refl ![1]) x (ofReal 0)) x (ofReal 0))
-      (pow (.refl ![1]) · (ofReal 0)) := by
+      (pow (w := w) (.refl ![1]) · (ofReal 0)) := by
   intro hj
   obtain ⟨_, L, _, _, hrule⟩ := hj 0 (Set.mem_univ _)
-  obtain ⟨_, _, hv⟩ := hrule 0
+  obtain ⟨_, _, _, hv⟩ := hrule 0
   have := hv (fun _ => ⟨0, by simp [broadcastShape]⟩) (fun _ => ⟨0, by simp [broadcastShape]⟩)
     fun _ => rfl
-  have e1 : (Scalar.fin 0).pow (.fin (0 + -1)) = .posInf := by
+  have e1 : (Scalar.fin (w := w) 0).pow (.fin (0 + -1)) = .posInf := by
     simp [Scalar.pow, Scalar.zero_def, Scalar.one_def]
-  have e2 : Scalar.fin 0 * .posInf = .nan := by
+  have e2 : Scalar.fin (w := w) 0 * .posInf = .nan := by
     show Scalar.infWithSign 0 = _
     simp [Scalar.infWithSign]
   simp only [powJvpLeft, mul, pow, sub, binop, ofReal, Pi.zero_apply, Scalar.one_def,

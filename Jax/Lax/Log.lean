@@ -13,15 +13,15 @@ Differentiation rules of the `log` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `log`.
 `jax/_src/lax/lax.py:4808`: `ad.defjvp(log_p, lambda g, x, **kwargs: div(g, x))` -/
-noncomputable def logJvp (g x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def logJvp (g x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   div (.refl s) g x
 
 /-- The JVP rule of `log` computes the derivative of `log` at positive arrays. -/
-theorem logJvp_correct : IsJvpOfOn logJvp (log (ι := Index s)) {x | ∀ i, 0 < x i} := by
+theorem logJvp_correct : IsJvpOfOn logJvp (log (ι := Index s) (w := w)) {x | ∀ i, 0 < x i} := by
   intro x hx
   refine ⟨fun y i => Real.log (y i),
     ContinuousLinearMap.pi fun i => (x i)⁻¹ • ContinuousLinearMap.proj i, ?_, ?_, ?_⟩

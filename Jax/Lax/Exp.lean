@@ -13,16 +13,16 @@ Differentiation rules of the `exp` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `exp`.
 `standard_jvp2` passes the primal result `ans` to the rule, `jax/_src/interpreters/ad.py:989`.
 `jax/_src/lax/lax.py:4785`: `ad.defjvp2(exp_p, lambda g, ans, x, **kwargs: mul(g, ans))` -/
-noncomputable def expJvp (g ans _x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def expJvp (g ans _x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   mul (.refl s) g ans
 
 /-- The JVP rule of `exp` computes the derivative of `exp`. -/
-theorem expJvp_correct : IsJvpOf (fun g x => expJvp g (exp x) x) (exp (ι := Index s)) := by
+theorem expJvp_correct : IsJvpOf (fun g x => expJvp g (exp x) x) (exp (ι := Index s) (w := w)) := by
   intro x _
   refine ⟨fun y i => Real.exp (y i),
     ContinuousLinearMap.pi fun i => Real.exp (x i) • ContinuousLinearMap.proj i, ?_, ?_, ?_⟩

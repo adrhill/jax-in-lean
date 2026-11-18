@@ -18,19 +18,19 @@ At `0` the rule returns `g * (0.5 / 0) = g * ∞`, which is NaN for `g = 0`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `sqrt`.
 `standard_jvp2` passes the primal result `ans` to the rule, `jax/_src/interpreters/ad.py:989`.
 `_const(x, 0.5)` has rank 0, so `div` broadcasts it to the shape of `ans`.
 `jax/_src/lax/lax.py:5181`:
 `ad.defjvp2(sqrt_p, lambda g, ans, x, **kwargs: mul(g, div(_const(x, 0.5), ans)))` -/
-noncomputable def sqrtJvp (g ans _x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def sqrtJvp (g ans _x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   mul (.refl s) g (constDiv (.fin (1 / 2)) ans)
 
 /-- The JVP rule of `sqrt` computes the derivative of `sqrt` at positive arrays. -/
 theorem sqrtJvp_correct :
-    IsJvpOfOn (fun g x => sqrtJvp g (sqrt x) x) (sqrt (ι := Index s)) {x | ∀ i, 0 < x i} := by
+    IsJvpOfOn (fun g x => sqrtJvp g (sqrt x) x) (sqrt (ι := Index s) (w := w)) {x | ∀ i, 0 < x i} := by
   intro x hx
   refine ⟨fun y i => Real.sqrt (y i),
     ContinuousLinearMap.pi fun i => (1 / (2 * Real.sqrt (x i))) • ContinuousLinearMap.proj i,
@@ -54,8 +54,8 @@ theorem sqrtJvp_correct :
 
 /-- No JVP rule of `sqrt` is correct at an array with an entry that is not positive:
 arbitrarily close to it there are arrays with a negative entry, whose square root is NaN. -/
-theorem sqrt_not_isJvpOfOn (jvp : Tensor (Index s) → Tensor (Index s) → Tensor (Index s))
-    {x : Index s → ℝ} (hx : ∃ i, x i ≤ 0) : ¬ IsJvpOfOn jvp (sqrt (ι := Index s)) {x} := by
+theorem sqrt_not_isJvpOfOn (jvp : Tensor (.float w) (Index s) → Tensor (.float w) (Index s) → Tensor (.float w) (Index s))
+    {x : Index s → ℝ} (hx : ∃ i, x i ≤ 0) : ¬ IsJvpOfOn jvp (sqrt (ι := Index s) (w := w)) {x} := by
   intro hj
   obtain ⟨i, hi⟩ := hx
   obtain ⟨F, -, hF, -⟩ := hj x rfl

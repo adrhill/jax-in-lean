@@ -8,7 +8,9 @@ public import Jax.Lax.Primal
 The primitives of `Jax/Lax/Primal.lean` take their shape checks as proof arguments.
 Python code that branches on shapes, such as a batching rule, calls them on arrays of any shape,
 and the call raises if a check fails.
-Here every primitive is a function of `Arr` that returns `none` if a shape check fails.
+Here every primitive is a function of `Arr` that returns `none` if a shape or dtype check fails.
+Some primitives are modelled only for floating-point dtypes:
+they also return `none` for the other dtypes, which JAX accepts, and say so.
 -/
 
 @[expose] public section
@@ -28,11 +30,27 @@ instance {sw : Shape m} {s : Shape n} : Decidable (Lax.WhichShape sw s) :=
 
 namespace Arr
 
-/-- `lax.clamp(min, x, max)`. -/
+/-- The entries of `a` as an array of dtype `d`, or `none` if `a` has another dtype. -/
+def valAs (a : Arr) (d : DType) : Option (Tensor d (Index a.shape)) :=
+  if h : a.dtype = d then some (h ▸ a.val) else none
+
+/-- `lax.clamp(min, x, max)`.
+`_clamp_dtype_rule`, `jax/_src/lax/lax.py:7731`, checks that the three arguments have the same dtype:
+```
+_clamp_dtype_rule = partial(naryop_dtype_rule, input_dtype, [_any, _any, _any],
+                            'clamp')
+```
+Dtypes other than floating-point ones, which it accepts, are not modelled: `none`. -/
 noncomputable def clamp (lo x hi : Arr) : Option Arr :=
-  if h : Lax.WhichShape lo.shape x.shape ∧ Lax.WhichShape hi.shape x.shape then
-    some ⟨x.shape, Lax.clamp h.1 h.2 lo.val x.val hi.val⟩
-  else none
+  match x with
+  | @Arr.mk _ s (.float w) v =>
+    match lo.valAs (.float w), hi.valAs (.float w) with
+    | some l, some u =>
+      if h : Lax.WhichShape lo.shape s ∧ Lax.WhichShape hi.shape s then
+        some ⟨s, Lax.clamp h.1 h.2 l v u⟩
+      else none
+    | _, _ => none
+  | _ => none
 
 /-- `lax.broadcast_in_dim(operand, shape, broadcast_dimensions)`.
 `_broadcast_in_dim_shape_rule`, `jax/_src/lax/lax.py:7456`, also checks
@@ -69,10 +87,14 @@ def broadcast (operand : Arr) (sizes : List ℕ) : Option Arr :=
 
 /-- `lax.cumsum(operand, axis, reverse)`.
 `_cumred_shape_rule`, `jax/_src/lax/control_flow/loops.py:3181`, checks that `axis` is an axis of the operand.
-Negative axes, which it rejects, are not representable. -/
+Negative axes, which it rejects, are not representable.
+Integer dtypes, which `_cumred_dtype_rule`, `jax/_src/lax/control_flow/loops.py:3220`, accepts,
+are not modelled: `none`. -/
 def cumsum (operand : Arr) (axis : ℕ) (reverse : Bool) : Option Arr :=
-  if h : axis < operand.rank then some ⟨operand.shape, Lax.cumsum ⟨axis, h⟩ reverse operand.val⟩
-  else none
+  match operand with
+  | @Arr.mk r s (.float _) v =>
+    if h : axis < r then some ⟨s, Lax.cumsum ⟨axis, h⟩ reverse v⟩ else none
+  | _ => none
 
 /-! ## Helpers of batching rules -/
 

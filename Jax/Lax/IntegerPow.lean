@@ -13,7 +13,7 @@ Differentiation rules of the `integer_pow` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The shape of the result of `_integer_pow_jvp`:
 the shape of `g` for the exponents 0 and 1, where it returns `_zeros(g)` or `g`,
@@ -35,7 +35,7 @@ def _integer_pow_jvp(g, x, *, y):
   return mul(g, mul(_const(x, y), integer_pow(x, y - 1)))
 ``` -/
 noncomputable def integerPowJvp :
-    (y : ℤ) → (g x : Tensor (Index s)) → Tensor (Index (integerPowJvpShape s y))
+    (y : ℤ) → (g x : Tensor (.float w) (Index s)) → Tensor (.float w) (Index (integerPowJvpShape s y))
   | .ofNat 0, _, _ => fun _ => 0
   | .ofNat 1, g, _ => g
   | .ofNat 2, g, x => mul (.refl s) g (constMul (.fin 2) x)
@@ -45,7 +45,7 @@ noncomputable def integerPowJvp :
 /-- The JVP rule of `integer_pow` computes the derivative of `integer_pow` for a nonnegative exponent,
 and at arrays without zeros for a negative exponent. -/
 theorem integerPowJvp_correct (y : ℤ) :
-    IsJvpOfOn (integerPowJvp (s := s) y) (integerPow y) {x | 0 ≤ y ∨ ∀ i, x i ≠ 0} := by
+    IsJvpOfOn (integerPowJvp (s := s) (w := w) y) (integerPow y) {x | 0 ≤ y ∨ ∀ i, x i ≠ 0} := by
   intro x hx
   have hx' : ∀ i, 0 ≤ y ∨ x i ≠ 0 := fun i => hx.imp id (· i)
   refine ⟨fun z i => z i ^ y,

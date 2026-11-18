@@ -18,7 +18,7 @@ and returns a tangent of the wrong shape for `x` of shape `(1,)` and a constant 
 
 namespace Jax.Lax
 
-variable {n K : ℕ} {sx : Shape n} {sc : Fin (K + 2) → Shape n}
+variable {n K : ℕ} {sx : Shape n} {sc : Fin (K + 2) → Shape n} {w : FloatWidth}
 
 theorem broadcastableAll_derivCoeffs (h : BroadcastableAll (sx :: List.ofFn sc)) :
     BroadcastableAll (sx :: List.ofFn fun k : Fin (K + 1) => sc k.succ) := by
@@ -31,8 +31,8 @@ theorem broadcastableAll_derivCoeffs (h : BroadcastableAll (sx :: List.ofFn sc))
 /-- `deriv_coeffs` of `_polynomial_jvp`: the coefficients `k * a k` of the derivative, for `k ≥ 1`.
 `jax/_src/lax/lax.py:5263`:
 `deriv_coeffs = [mul(_const(c, k), c) for k, c in enumerate(coeffs[1:], 1)]` -/
-noncomputable def polynomialDerivCoeffs (coeffs : (k : Fin (K + 2)) → Tensor (Index (sc k)))
-    (k : Fin (K + 1)) : Tensor (Index (sc k.succ)) :=
+noncomputable def polynomialDerivCoeffs (coeffs : (k : Fin (K + 2)) → Tensor (.float w) (Index (sc k)))
+    (k : Fin (K + 1)) : Tensor (.float w) (Index (sc k.succ)) :=
   constMul (.fin ((k : ℝ) + 1)) (coeffs k.succ)
 
 /-- The JVP rule of `polynomial` for the tangent `dotX` of `x`,
@@ -54,7 +54,7 @@ def _polynomial_jvp(primals, tangents, *, unroll=None):
     dot_y = ad.add_tangents(dot_y, mul(dot_x, dy_dx))
 ``` -/
 noncomputable def polynomialJvp (h : BroadcastableAll (sx :: List.ofFn sc))
-    (coeffs : (k : Fin (K + 2)) → Tensor (Index (sc k))) (dotX x : Tensor (Index sx)) :=
+    (coeffs : (k : Fin (K + 2)) → Tensor (.float w) (Index (sc k))) (dotX x : Tensor (.float w) (Index sx)) :=
   mul (broadcastsTo_broadcastShapes (broadcastableAll_derivCoeffs h) List.mem_cons_self).broadcastable
     dotX (polynomial (broadcastableAll_derivCoeffs h) x (polynomialDerivCoeffs coeffs))
 
@@ -65,7 +65,7 @@ private noncomputable def hornerR (x : ℝ) : {K : ℕ} → (Fin (K + 1) → ℝ
   | _ + 1, a => hornerR x (Fin.tail a) * x + a 0
 
 private theorem horner_fin (x : ℝ) : ∀ {K : ℕ} (a : Fin (K + 1) → ℝ),
-    horner (.fin x) (fun k => .fin (a k)) = .fin (hornerR x a)
+    horner (.fin x : Scalar w) (fun k => .fin (a k)) = .fin (hornerR x a)
   | 0, _ => rfl
   | _ + 1, a => by
     show horner (.fin x) (fun k => .fin (Fin.tail a k)) * .fin x + .fin (a 0) = _
@@ -109,7 +109,7 @@ if the constant coefficient broadcasts to the shape of `x` and the other coeffic
 theorem polynomialJvp_correct (h : BroadcastableAll (sx :: List.ofFn sc))
     (coeffs : (k : Fin (K + 2)) → Index (sc k) → ℝ)
     (h0 : BroadcastsTo (sc 0) (broadcastShapes (sx :: List.ofFn fun k : Fin (K + 1) => sc k.succ))) :
-    IsJvpOf (polynomialJvp h fun k => ofReal (coeffs k)) (polynomial h · fun k => ofReal (coeffs k)) := by
+    IsJvpOf (polynomialJvp h fun k => ofReal (coeffs k)) (polynomial (w := w) h · fun k => ofReal (coeffs k)) := by
   intro x _
   have hx := broadcastsTo_broadcastShapes h List.mem_cons_self
   have hc : ∀ k, BroadcastsTo (sc k) (broadcastShapes (sx :: List.ofFn sc)) := fun k =>
@@ -180,10 +180,10 @@ theorem polynomialJvp_not_correct
     (coeffs : (k : Fin 2) → Index ((![![3], ![1]] : Fin 2 → Shape 1) k) → ℝ) :
     ¬ IsJvpOf (polynomialJvp (sx := ![1]) (by unfold BroadcastableAll Broadcastable; decide)
         fun k => ofReal (coeffs k))
-      (polynomial (by unfold BroadcastableAll Broadcastable; decide) · fun k => ofReal (coeffs k)) := by
+      (polynomial (w := w) (by unfold BroadcastableAll Broadcastable; decide) · fun k => ofReal (coeffs k)) := by
   intro hj
   obtain ⟨_, _, _, _, hrule⟩ := hj 0 (Set.mem_univ _)
-  obtain ⟨hn, hs, _⟩ := hrule 0
+  obtain ⟨_, hn, hs, _⟩ := hrule 0
   have h0 := hs 0
   rw [show Fin.cast hn 0 = (0 : Fin 1) from rfl] at h0
   exact absurd h0 (by decide)

@@ -40,45 +40,45 @@ namespace Jax.Jaxpr
 
 open Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 theorem whichShape_broadcastShape (s : Shape n) : WhichShape (broadcastShape s s) s :=
   .inr (congrArg List.ofFn (funext fun d => by simp [broadcastShape]))
 
 /-- `relu` as `select_n(x > 0, 0, x)`. -/
-noncomputable def relu (x : Tensor (Index s)) : Tensor (Index s) :=
+noncomputable def relu (x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) :=
   selectN rfl (whichShape_broadcastShape s) (gt (.refl s) x 0) 0 x
 
 /-- The function of jax-ml/jax#6636, `sqrt(relu(x))`. -/
-noncomputable def sqrtRelu (x : Tensor (Index s)) : Tensor (Index s) := sqrt (relu x)
+noncomputable def sqrtRelu (x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) := sqrt (relu x)
 
 /-- Forward mode: the JVP rules of `gt`, `select_n` and `sqrt` applied in turn.
 `gt` has a zero tangent, and so does the constant case `0`. -/
-noncomputable def sqrtReluJvp (g x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def sqrtReluJvp (g x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   sqrtJvp (selectNJvp rfl (whichShape_broadcastShape s) (gt (.refl s) x 0) 0 g 0 x)
     (sqrtRelu x) (relu x)
 
 /-- Reverse mode: the transpose rules of `mul`, for the tangent `mul(g, div(0.5, ans))` of `sqrt`,
 and of `select_n` applied in turn to the cotangent `ct`. -/
-noncomputable def sqrtReluVjp (ct : Tensor (Index (broadcastShape s s))) (x : Tensor (Index s)) :
-    Tensor (Index s) :=
+noncomputable def sqrtReluVjp (ct : Tensor (.float w) (Index (broadcastShape s s))) (x : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index s) :=
   selectNTranspose1 (whichShape_broadcastShape s) (gt (.refl s) x 0)
     (mulTransposeLeft (.refl s) (constDiv (.fin (1 / 2)) (sqrtRelu x)) ct)
 
 /-! ## At a negative array -/
 
 private theorem gt_of_neg {x : Index s → ℝ} (hx : ∀ i, x i < 0) (j : Index (broadcastShape s s)) :
-    gt (.refl s) (ofReal x) 0 j = false := by
+    gt (w := w) (.refl s) (ofReal x) 0 j = false := by
   simp [gt, binop, ofReal, Scalar.zero_def, (hx _).le]
 
 /-- At a negative array, `relu` is `0`, where `sqrt` has no correct JVP rule. -/
-theorem relu_of_neg {x : Index s → ℝ} (hx : ∀ i, x i < 0) : relu (ofReal x) = ofReal 0 := by
+theorem relu_of_neg {x : Index s → ℝ} (hx : ∀ i, x i < 0) : relu (w := w) (ofReal x) = ofReal 0 := by
   funext j
   simp [relu, selectN, gt_of_neg hx, ofReal, Scalar.zero_def]
 
 /-- Near a negative array, `sqrt(relu(x))` is the constant `0`, so its derivative is `0`. -/
 theorem sqrtRelu_hasZeroJvp :
-    IsJvpOfOn (fun _ _ => (0 : Tensor (Index s))) (sqrtRelu (s := s)) {x | ∀ i, x i < 0} := by
+    IsJvpOfOn (fun _ _ => (0 : Tensor (.float w) (Index s))) (sqrtRelu (s := s) (w := w)) {x | ∀ i, x i < 0} := by
   intro x hx
   have hopen : IsOpen {y : Index s → ℝ | ∀ i, y i < 0} := by
     simp only [Set.ofPred_forall]
@@ -90,11 +90,11 @@ theorem sqrtRelu_hasZeroJvp :
 
 /-- At a negative array, forward mode returns NaN: `0 * (0.5 / sqrt 0) = 0 * ∞`. -/
 theorem sqrtReluJvp_of_neg (g : Index s → ℝ) {x : Index s → ℝ} (hx : ∀ i, x i < 0)
-    (j : Index (broadcastShape s s)) : sqrtReluJvp (ofReal g) (ofReal x) j = .nan := by
-  have h1 : (Scalar.fin 2⁻¹) / Scalar.fin 0 = .posInf := by
+    (j : Index (broadcastShape s s)) : sqrtReluJvp (w := w) (ofReal g) (ofReal x) j = .nan := by
+  have h1 : (Scalar.fin (w := w) 2⁻¹) / Scalar.fin 0 = .posInf := by
     show (if (0 : ℝ) = 0 then Scalar.infWithSign 2⁻¹ else _) = _
     simp [Scalar.infWithSign]
-  have h2 : Scalar.fin 0 * .posInf = .nan := by
+  have h2 : Scalar.fin (w := w) 0 * .posInf = .nan := by
     show Scalar.infWithSign 0 = _
     simp [Scalar.infWithSign]
   simp [sqrtReluJvp, sqrtJvp, selectNJvp, selectN, gt_of_neg hx, mul, binop, constDiv, sqrtRelu,
@@ -102,10 +102,10 @@ theorem sqrtReluJvp_of_neg (g : Index s → ℝ) {x : Index s → ℝ} (hx : ∀
 
 /-- Forward mode is wrong at every negative array, where the function is differentiable. -/
 theorem sqrtReluJvp_not_correct [Nonempty (Index s)] :
-    ¬ IsJvpOfOn sqrtReluJvp (sqrtRelu (s := s)) {x | ∀ i, x i < 0} := by
+    ¬ IsJvpOfOn sqrtReluJvp (sqrtRelu (s := s) (w := w)) {x | ∀ i, x i < 0} := by
   intro hj
   obtain ⟨_, L, -, -, hrule⟩ := hj (fun _ => -1) fun _ => by norm_num
-  obtain ⟨hr, -, hv⟩ := hrule 0
+  obtain ⟨_, hr, -, hv⟩ := hrule 0
   obtain ⟨i⟩ := ‹Nonempty (Index s)›
   let j : Index (broadcastShape s s) := fun d => ⟨i d, by simp [broadcastShape]⟩
   have := hv j i fun d => by simp [j]
@@ -114,7 +114,7 @@ theorem sqrtReluJvp_not_correct [Nonempty (Index s)] :
 
 /-- At a negative array, reverse mode returns `0`, the transpose of the zero derivative. -/
 theorem sqrtReluVjp_of_neg (ct : Index (broadcastShape s s) → ℝ) {x : Index s → ℝ}
-    (hx : ∀ i, x i < 0) : sqrtReluVjp (ofReal ct) (ofReal x) = ofReal 0 := by
+    (hx : ∀ i, x i < 0) : sqrtReluVjp (w := w) (ofReal ct) (ofReal x) = ofReal 0 := by
   funext j
   simp [sqrtReluVjp, selectNTranspose1, selectN, gt_of_neg hx, ofReal, Scalar.zero_def]
 

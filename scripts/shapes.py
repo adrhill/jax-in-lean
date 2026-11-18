@@ -1,14 +1,19 @@
-"""Shape-level differential test of the Lean model against the pinned JAX.
+"""Shape- and dtype-level differential test of the Lean model against the pinned JAX.
 
 JAX side: every case is traced with `jax.make_jaxpr` on abstract inputs, so nothing is evaluated.
-For each modelled function it records the primal output shape,
-the output shape of each registered JVP and transpose rule, called directly inside the trace,
+For each modelled function it records the primal output shape and dtype,
+the output shape and dtype of each registered JVP and transpose rule, called directly inside the trace,
 the user-facing result of `jax.jvp` and `jax.vjp`, and whether tracing raises.
+Every case runs at `float32`, and a sample of the cases also at `bfloat16` and `float16`.
 
 Lean side: the recorded results become one Lean `example` per case in `gen/shapes/`,
-checked by `decide` against the shapes in the types of the model's definitions.
-If JAX traces a case, the example states that the proof arguments hold and that every shape agrees.
+checked by `decide` against the shapes and dtypes in the types of the model's definitions.
+If JAX traces a case, the example states that the proof arguments hold and that every shape and dtype agrees.
 If JAX raises, it states that a proof argument is false.
+
+The cases `dtypes` give the arguments of a primitive several dtypes, some of them different.
+JAX raises exactly when Lean rejects the model's primitive applied to arrays of these dtypes:
+the case is `#check` of the application if JAX traces it, and `#check_failure` if JAX raises.
 
 A transpose rule with several linear inputs is also called for every choice of linear inputs,
 and a batching rule for every choice of batched arguments and batch axes:
@@ -255,9 +260,46 @@ def generate_cases():
             "idx": g["idx"],
         }
         cases.append(("scatter_sub", mutate(rng, sc) if rng.random() < 0.5 else sc))
+    # Batching rule of clamp with arguments of different dtypes.
+    for prim, p in rng.sample(
+        [c for c in batch_cases if c[1]["shapes"][0] == c[1]["shapes"][2]], 60
+    ):
+        dts = [rng.choice(FLOATS) for _ in range(3)]
+        cases.append((prim, {**p, "dts": dts}))
+    # Dtypes: every case at float32, and every fourth case also at bfloat16 or float16.
+    # The indices of gather and scatter have every integer width.
+    widths = []
+    for i, (prim, p) in enumerate(cases):
+        if prim in ("gather", *SCATTER):
+            p = {**p, "it": INTS[i % len(INTS)]}
+        widths.append((prim, {**p, "dt": "float32"}))
+        if i % 8 in (1, 5):
+            widths.append((prim, {**p, "dt": "bfloat16" if i % 8 == 1 else "float16"}))
+    cases = widths
+    # Arguments of different dtypes: every combination of float widths, and of integer widths for indices.
+    for of, kinds in DTYPE_CASES.items():
+        choices = [FLOATS if k == "float" else INTS if k == "int" else [k] for k in kinds]
+        cases += [("dtypes", {"of": of, "dts": list(dts)}) for dts in itertools.product(*choices)]
     # Drop repeated cases, keeping the order.
     unique = {json.dumps(c, sort_keys=True): c for c in cases}
     return list(unique.values())
+
+
+FLOATS = ("bfloat16", "float16", "float32")
+INTS = ("int8", "int16", "int32")
+
+# Primitives whose arguments get several dtypes: the kinds of dtypes of the arguments in the model.
+DTYPE_CASES = {
+    **dict.fromkeys(("mul", "div", "max", "pow", "rem", *COMPARE), ("float", "float")),
+    "select_n": ("bool", "float", "float"),
+    "clamp": ("float", "float", "float"),
+    # The coefficients, which the model takes as one family of arrays of one dtype.
+    "polynomial": ("float", "float"),
+    "pad": ("float", "float"),
+    "gather": ("float", "int"),
+    "scatter_add": ("float", "int", "float"),
+    "scatter_sub": ("float", "int", "float"),
+}
 
 
 MODES = ("clip", "fill", "promise_in_bounds")
@@ -331,22 +373,30 @@ def mutate(rng, case):
 def jax_record(case):
     """Trace one case on the pinned JAX. Returns a dict from observation names to results.
 
-    A result is `{"shape": [...]}`, `{"shapes": [[...], ...]}` or `{"error": "..."}`.
+    A result is `{"shape": [...], "dtype": ...}`, `{"shapes": [[...], ...], "dtypes": [...]}`
+    or `{"error": "..."}`.
     The observation `primal` is always present.
     """
     import jax
     import jax.numpy as jnp
+    import numpy as np
     from jax import lax
     from jax._src import config, core
     from jax._src.interpreters import ad
     from jax._src.lax import lax as L
 
     prim, p = case
+    # The dtype of the floating-point arguments, and of the indices.
+    DT = jnp.dtype(p.get("dt", "float32"))
+    IT = jnp.dtype(p.get("it", "int32"))
 
     def sds(s):
         if isinstance(s, jax.ShapeDtypeStruct):
             return s
-        return jax.ShapeDtypeStruct(tuple(s), jnp.float32)
+        return jax.ShapeDtypeStruct(tuple(s), DT)
+
+    def dtype_name(d):
+        return "float0" if d == jax.dtypes.float0 else jnp.dtype(d).name
 
     def bools(s):
         return jax.ShapeDtypeStruct(tuple(s), jnp.bool_)
@@ -358,14 +408,17 @@ def jax_record(case):
             msg = str(e).strip().splitlines()
             return {"error": f"{type(e).__name__}: {msg[0] if msg else ''}"}
         outs = [list(a.shape) for a in closed.out_avals]
-        return {"shape": outs[0]} if len(outs) == 1 else {"shapes": outs}
+        dtypes = [dtype_name(a.dtype) for a in closed.out_avals]
+        if len(outs) == 1:
+            return {"shape": outs[0], "dtype": dtypes[0]}
+        return {"shapes": outs, "dtypes": dtypes}
 
     def params_of(fn, primitive, *ins):
         jaxpr = jax.make_jaxpr(fn)(*map(sds, ins)).jaxpr
         return next(e.params for e in jaxpr.eqns if e.primitive is primitive)
 
     def undefined(s):
-        return ad.UndefinedPrimal(core.ShapedArray(tuple(s), jnp.float32))
+        return ad.UndefinedPrimal(core.ShapedArray(tuple(s), DT))
 
     def jvp_rules(primitive):
         # `ad.defjvp` registers a partial application of `ad.standard_jvp` to the rules.
@@ -391,7 +444,32 @@ def jax_record(case):
             lambda x, ct: jax.vjp(lambda x: f(x, **kw), x)[1](ct), s, rec["primal"]["shape"]
         )
 
-    if prim in ("sin", "cos", "log", "sqrt", "exp"):
+    if prim == "dtypes":
+        # Every argument has the shape `(2,)`, a padding value or a bound has the shape `()`,
+        # and the operand of gather and scatter `(3,)` with indices `(2, 1)`.
+        dts = [jnp.dtype(d) for d in p["dts"]]
+        of = p["of"]
+        dn_g = lax.GatherDimensionNumbers((), (0,), (0,))
+        dn_s = lax.ScatterDimensionNumbers((), (0,), (0,))
+        if of == "select_n":
+            fn, shapes_ = lax.select_n, [(2,), (2,), (2,)]
+        elif of == "clamp":
+            fn, shapes_ = lax.clamp, [(), (2,), ()]
+        elif of == "polynomial":
+            # The primitive: `lax.polynomial` converts the coefficients to the dtype of `x`.
+            fn, shapes_ = (lambda x, c: L.polynomial_p.bind(x, c, c)), [(2,), (2,)]
+        elif of == "pad":
+            fn, shapes_ = (lambda x, v: lax.pad(x, v, [(1, 1, 0)])), [(2,), ()]
+        elif of == "gather":
+            fn = lambda x, i: lax.gather(x, i, dn_g, (1,), mode="fill")
+            shapes_ = [(3,), (2, 1)]
+        elif of in SCATTER:
+            fn = lambda x, i, u: getattr(lax, of)(x, i, u, dn_s, mode="fill")
+            shapes_ = [(3,), (2, 1), (2,)]
+        else:
+            fn, shapes_ = getattr(lax, of), [(2,), (2,)]
+        rec["primal"] = trace(fn, *(jax.ShapeDtypeStruct(s, d) for s, d in zip(shapes_, dts)))
+    elif prim in ("sin", "cos", "log", "sqrt", "exp"):
         unary(getattr(lax, prim), getattr(L, f"{prim}_p"), p["s"], ans=prim in ("sqrt", "exp"))
     elif prim == "integer_pow":
         unary(lax.integer_pow, L.integer_pow_p, p["s"], y=p["y"])
@@ -573,15 +651,15 @@ def jax_record(case):
         s = p["s"]
         # A non-commutative monoid, so that `lax.reduce` binds `reduce_p`.
         op = lambda x, y: lax.select(y == 1.0, x, y)
-        f = lambda x: lax.reduce(x, 1.0, op, p["dims"])
+        f = lambda x: lax.reduce(x, np.array(1.0, DT), op, p["dims"])
         rec["primal"] = trace(f, s)
         if "error" not in rec["primal"]:
             out = rec["primal"]["shape"]
             params = params_of(f, L.reduce_p, s)
             jvp = ad.primitive_jvps[L.reduce_p]
-            init_dot = ad.Zero(core.ShapedArray((), jnp.float32))
+            init_dot = ad.Zero(core.ShapedArray((), DT))
             rec["jvp"] = trace(
-                lambda g, x: jvp((x, jnp.float32(1.0)), (g, init_dot), **params)[1][0], s, s
+                lambda g, x: jvp((x, np.array(1.0, DT)), (g, init_dot), **params)[1][0], s, s
             )
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
@@ -639,7 +717,7 @@ def jax_record(case):
 
             def transpose(ct):
                 # The rule adds the cotangent of the operand to an accumulator.
-                accum = ad.ValAccum(core.ShapedArray(tuple(s), jnp.float32))
+                accum = ad.ValAccum(core.ShapedArray(tuple(s), DT))
                 tr(ct, accum, **params)
                 return accum.freeze()
 
@@ -654,7 +732,7 @@ def jax_record(case):
     elif prim == "maybe_broadcast":
         rec["primal"] = trace(lambda x: L._maybe_broadcast(tuple(p["target"]), x, None), p["sx"])
     elif prim == "unbroadcast":
-        aval = core.ShapedArray(tuple(p["sa"]), jnp.float32)
+        aval = core.ShapedArray(tuple(p["sa"]), DT)
         with config.enable_checks(p["checks"]):
             rec["primal"] = trace(lambda x: L._unbroadcast(aval, x), p["sx"])
     elif prim == "clamp_batch":
@@ -667,10 +745,13 @@ def jax_record(case):
             out_bdim.append(bdim)
             return out
 
-        res = trace(rule, *p["shapes"])
-        user = trace(jax.vmap(lax.clamp, in_axes=bdims), *p["shapes"])
+        ins = [
+            jax.ShapeDtypeStruct(tuple(s), d) for s, d in zip(p["shapes"], p.get("dts", [DT] * 3))
+        ]
+        res = trace(rule, *ins)
+        user = trace(jax.vmap(lax.clamp, in_axes=bdims), *ins)
         rec["batch"] = {
-            "result": None if "error" in res else [res["shape"], int(out_bdim[0])],
+            "result": None if "error" in res else [res["shape"], res["dtype"], int(out_bdim[0])],
             # `vmap` moves the batch axis of the result to the front.
             "user": user.get("shape"),
             "error": res.get("error"),
@@ -694,7 +775,7 @@ def jax_record(case):
             p["shape"],
         )
         rec["batch"] = {
-            "result": None if "error" in res else [res["shape"], int(out_bdim[0])],
+            "result": None if "error" in res else [res["shape"], res["dtype"], int(out_bdim[0])],
             "user": user.get("shape"),
             "error": res.get("error"),
         }
@@ -704,7 +785,7 @@ def jax_record(case):
 
         so, si, ss, mode = p["so"], p["si"], tuple(p["ss"]), p["mode"]
         gather_dnums = lax.GatherDimensionNumbers(*map(tuple, p["dn"]))
-        ints = jax.ShapeDtypeStruct(tuple(si), jnp.int32)
+        ints = jax.ShapeDtypeStruct(tuple(si), IT)
         gath = lambda x, i: lax.gather(x, i, gather_dnums, ss, mode=mode)
         rec["primal"] = trace(gath, so, ints)
         if "error" not in rec["primal"]:
@@ -715,7 +796,7 @@ def jax_record(case):
 
             def transpose(ct, i):
                 # The rule adds the cotangent of the operand to an accumulator.
-                accum = ad.ValAccum(core.ShapedArray(tuple(so), jnp.float32))
+                accum = ad.ValAccum(core.ShapedArray(tuple(so), DT))
                 tr(ct, accum, i, **params)
                 return accum.freeze()
 
@@ -730,8 +811,9 @@ def jax_record(case):
             # The positions that the result reads: the operand counts its entries from 1.
             size = math.prod(so)
             if 0 < size and 0 < math.prod(out) <= 64:
+                # At float32, where the entries are exact: the positions do not depend on the dtype.
                 x = jnp.arange(1, size + 1, dtype=jnp.float32).reshape(so)
-                i = jnp.array(p["idx"], jnp.int32).reshape(si)
+                i = jnp.array(p["idx"], IT).reshape(si)
                 try:
                     got = np.asarray(lax.gather(x, i, gather_dnums, ss, mode=mode, fill_value=0))
                 except Exception as e:  # noqa: BLE001
@@ -753,7 +835,7 @@ def jax_record(case):
 
         so, si, su, mode = p["so"], p["si"], p["su"], p["mode"]
         dnums = lax.ScatterDimensionNumbers(*map(tuple, p["dn"]))
-        ints = jax.ShapeDtypeStruct(tuple(si), jnp.int32)
+        ints = jax.ShapeDtypeStruct(tuple(si), IT)
         scatter_op = getattr(lax, prim)
         scatter_p = getattr(slicing, prim + "_p")
         f = lambda x, i, u: scatter_op(x, i, u, dnums, mode=mode)
@@ -786,7 +868,7 @@ def jax_record(case):
                     )
                     partial_cts[lin] = [
                         cts[0] is not None,
-                        None if cts[2] is None else list(cts[2].shape),
+                        None if cts[2] is None else [list(cts[2].shape), dtype_name(cts[2].dtype)],
                     ]
                     return [c for c in cts if c is not None]
 
@@ -796,8 +878,8 @@ def jax_record(case):
                     # The `gather` of the rule reads a nonempty result from an empty operand:
                     # tracing may succeed where compiling fails.
                     try:
-                        zeros = [jnp.zeros(s, jnp.float32) for s in (so, so, su)]
-                        i = jnp.array(p["idx"], jnp.int32).reshape(si)
+                        zeros = [jnp.zeros(s, DT) for s in (so, so, su)]
+                        i = jnp.array(p["idx"], IT).reshape(si)
                         partial_rule(zeros[0], zeros[1], i, zeros[2])
                     except Exception:  # noqa: BLE001
                         partial_cts[lin] = None
@@ -823,8 +905,9 @@ def jax_record(case):
             elementwise = not p["dn"][2] and su == so
             size = math.prod(su)
             if 0 < size <= 24 and math.prod(so) > 0 and not elementwise:
+                # At float32, where the sums are exact: the positions do not depend on the dtype.
                 u = (2.0 ** jnp.arange(size, dtype=jnp.float32)).reshape(su)
-                i = jnp.array(p["idx"], jnp.int32).reshape(si)
+                i = jnp.array(p["idx"], IT).reshape(si)
                 try:
                     got = np.asarray(
                         abs(scatter_op(jnp.zeros(so, jnp.float32), i, u, dnums, mode=mode))
@@ -871,6 +954,24 @@ def lfinset(xs, ty):
     )
 
 
+# Dtypes as Lean terms.
+LDT = {
+    "bfloat16": "DType.float .bf16",
+    "float16": "DType.float .f16",
+    "float32": "DType.float .f32",
+    "int8": "DType.int .i8",
+    "int16": "DType.int .i16",
+    "int32": "DType.int .i32",
+    "bool": "DType.bool",
+    "float0": "DType.float0",
+}
+
+
+def ltype(s, dt):
+    """The Lean value of `typeOf` for an array of shape `s` and dtype `dt`."""
+    return f"({llist(s)}, {LDT[dt]})"
+
+
 def by(*unfold):
     return f"(by unfold {' '.join(unfold)}; decide)" if unfold else "(by decide)"
 
@@ -884,24 +985,28 @@ def lean_spec(prim, p):
     and `vjp` lists the pairs of a term and a term or shape that must have the same shape
     for reverse mode to succeed.
     The terms contain `PROOF i` for the proof of argument `i`.
+    The float width of the arrays is the named argument `w` or the dtype `d`, and that of indices `wi`.
     """
+    F = f"({LDT[p['dt']]})"
+    W, D = f"(w := .{LDT[p['dt']].split('.')[-1]})", f"(d := {F})"
+    WI = f"(wi := .{LDT[p.get('it', 'int32')].split('.')[-1]})"
     if prim in ("sin", "cos", "log", "sqrt", "exp"):
         S, f = lshape(p["s"]), f"Lax.{prim}"
-        primal = f"{f} (0 : Tensor (Index {S}))"
+        primal = f"{f} (0 : Tensor {F} (Index {S}))"
         # The rules of `ad.defjvp2` also take the primal result.
         rule_args = "0 0 0" if prim in ("sqrt", "exp") else "0 0"
-        jvp = f"{prim}Jvp (s := {S}) {rule_args}"
+        jvp = f"{prim}Jvp (s := {S}) {W} {rule_args}"
         return [], {"primal": primal, "jvp": jvp}, [("jvp", "primal")]
     if prim == "integer_pow":
         S, y = lshape(p["s"]), f"({p['y']})"
-        primal = f"integerPow {y} (0 : Tensor (Index {S}))"
-        jvp = f"integerPowJvp (s := {S}) {y} 0 0"
+        primal = f"integerPow {y} (0 : Tensor {F} (Index {S}))"
+        jvp = f"integerPowJvp (s := {S}) {W} {y} 0 0"
         return [], {"primal": primal, "jvp": jvp}, [("jvp", "primal")]
     if prim in ("sign", "floor", "abs"):
-        return [], {"primal": f"Lax.{prim} (0 : Tensor (Index {lshape(p['s'])}))"}, []
+        return [], {"primal": f"Lax.{prim} (0 : Tensor {F} (Index {lshape(p['s'])}))"}, []
     if prim in ("mul", "div", "max", "pow", "rem"):
         SX, SY = lshape(p["sx"]), lshape(p["sy"])
-        imp = f"(sx := {SX}) (sy := {SY}) PROOF0"
+        imp = f"(sx := {SX}) (sy := {SY}) {W} PROOF0"
         name = prim
         primal = f"Lax.{name} {imp} 0 0"
         # The rules of `ad.defjvp2` also take the primal result.
@@ -922,16 +1027,16 @@ def lean_spec(prim, p):
         return [(f"Broadcastable {SX} {SY}", ("Broadcastable",))], terms, vjp
     if prim in COMPARE:
         SX, SY = lshape(p["sx"]), lshape(p["sy"])
-        primal = f"Lax.{prim} (sx := {SX}) (sy := {SY}) PROOF0 0 0"
+        primal = f"Lax.{prim} (sx := {SX}) (sy := {SY}) {W} PROOF0 0 0"
         return [(f"Broadcastable {SX} {SY}", ("Broadcastable",))], {"primal": primal}, []
     if prim == "select_n":
         SW, S0, S1 = lshape(p["sw"]), lshape(p["s0"]), lshape(p["s1"])
-        which = f"(fun _ => true : Index {SW} → Bool)"
+        which = f"(fun _ => true : Tensor .bool (Index {SW}))"
         imp = f"(sw := {SW}) (s0 := {S0}) (s1 := {S1}) PROOF0 PROOF1 {which}"
-        tr = f"(sw := {SW}) (s0 := {S0}) PROOF1 {which} 0"
+        tr = f"(sw := {SW}) (s0 := {S0}) {W} PROOF1 {which} 0"
         terms = {
-            "primal": f"selectN {imp} 0 0",
-            "jvp": f"selectNJvp {imp} 0 0 0 0",
+            "primal": f"selectN {D} {imp} 0 0",
+            "jvp": f"selectNJvp {W} {imp} 0 0 0 0",
             "transpose0": f"selectNTranspose0 {tr}",
             "transpose1": f"selectNTranspose1 {tr}",
         }
@@ -942,19 +1047,19 @@ def lean_spec(prim, p):
         return args, terms, [("jvp", "primal"), ("transpose0", p["s0"]), ("transpose1", p["s1"])]
     if prim == "clamp":
         SL, S, SH = lshape(p["sl"]), lshape(p["s"]), lshape(p["sh"])
-        primal = f"Lax.clamp (sl := {SL}) (sh := {SH}) (s := {S}) PROOF0 PROOF1 0 0 0"
+        primal = f"Lax.clamp (sl := {SL}) (sh := {SH}) (s := {S}) {W} PROOF0 PROOF1 0 0 0"
         terms = {
             "primal": primal,
-            "jvp_min": f"clampJvpMin (s := {S}) 0 0 0 0",
-            "jvp_operand": f"clampJvpOperand (s := {S}) 0 0 0 0",
-            "jvp_max": f"clampJvpMax (s := {S}) 0 0 0 0",
+            "jvp_min": f"clampJvpMin (s := {S}) {W} 0 0 0 0",
+            "jvp_operand": f"clampJvpOperand (s := {S}) {W} 0 0 0 0",
+            "jvp_max": f"clampJvpMax (s := {S}) {W} 0 0 0 0",
         }
         args: list[tuple[str, tuple[str, ...]]] = [
             (f"WhichShape {SL} {S}", ("WhichShape",)),
             (f"WhichShape {SH} {S}", ("WhichShape",)),
         ]
         if tuple(p["sl"]) == tuple(p["sh"]) == ():
-            imp = f"(sl := {SL}) (sh := {SH}) (s := {S})"
+            imp = f"(sl := {SL}) (sh := {SH}) (s := {S}) {W}"
             terms["jvp_min_scalar"] = f"clampJvpMinScalar {imp} PROOF2 0 0 0 0"
             terms["jvp_max_scalar"] = f"clampJvpMaxScalar {imp} PROOF3 0 0 0 0"
             args += [
@@ -970,7 +1075,7 @@ def lean_spec(prim, p):
         SX = lshape(p["sx"])
         n, k = len(p["sx"]), len(p["sc"])
         SC = f"(![{', '.join(map(lshape, p['sc']))}] : Fin {k} → Shape {n})"
-        imp = f"(sx := {SX}) (sc := {SC}) PROOF0"
+        imp = f"(sx := {SX}) (sc := {SC}) {W} PROOF0"
         primal = f"Lax.polynomial {imp} 0 (fun _ => 0)"
         terms = {"primal": primal}
         vjp = []
@@ -981,16 +1086,16 @@ def lean_spec(prim, p):
         return [(arg, ("BroadcastableAll", "Broadcastable"))], terms, vjp
     if prim == "reduce_sum":
         S, A = lshape(p["s"]), lfinset(p["axes"], f"(Fin {len(p['s'])})")
-        primal = f"reduceSum (s := {S}) {A} 0"
+        primal = f"reduceSum (s := {S}) {W} {A} 0"
         terms = {
             "primal": primal,
-            "jvp": f"reduceSumJvp (s := {S}) {A} 0 0",
-            "transpose": f"reduceSumTranspose (s := {S}) {A} 0",
+            "jvp": f"reduceSumJvp (s := {S}) {W} {A} 0 0",
+            "transpose": f"reduceSumTranspose (s := {S}) {W} {A} 0",
         }
         return [], terms, [("jvp", "primal"), ("transpose", p["s"])]
     if prim == "cumsum":
         S = lshape(p["s"])
-        imp = f"(s := {S}) ({p['axis']} : Fin {len(p['s'])}) {str(p['reverse']).lower()}"
+        imp = f"(s := {S}) {W} ({p['axis']} : Fin {len(p['s'])}) {str(p['reverse']).lower()}"
         terms = {
             "primal": f"Lax.cumsum {imp} 0",
             "jvp": f"cumsumJvp {imp} 0 0",
@@ -1000,25 +1105,28 @@ def lean_spec(prim, p):
     if prim == "reduce_max":
         S, A = lshape(p["s"]), lfinset(p["axes"], f"(Fin {len(p['s'])})")
         terms = {
-            "primal": f"reduceMax (s := {S}) {A} 0",
-            "jvp": f"reduceMaxJvp (s := {S}) {A} 0 (reduceMax (s := {S}) {A} 0) 0",
+            "primal": f"reduceMax (s := {S}) {W} {A} 0",
+            "jvp": f"reduceMaxJvp (s := {S}) {W} {A} 0 (reduceMax (s := {S}) {W} {A} 0) 0",
         }
         return [], terms, [("jvp", "primal")]
     if prim == "reduce":
         n = len(p["s"])
-        S, D = lshape(p["s"]), f"([{', '.join(map(str, p['dims']))}] : List (Fin {n}))"
-        primal = f"Lax.reduce (s := {S}) lastNotOne 1 {D} PROOF0 0"
-        terms = {"primal": primal, "jvp": f"reduceJvp (s := {S}) lastNotOne 1 {D} PROOF0 0 0"}
-        return [(f"List.Nodup {D}", ())], terms, [("jvp", "primal")]
+        S, DIMS = lshape(p["s"]), f"([{', '.join(map(str, p['dims']))}] : List (Fin {n}))"
+        primal = f"Lax.reduce (s := {S}) {W} lastNotOne 1 {DIMS} PROOF0 0"
+        terms = {
+            "primal": primal,
+            "jvp": f"reduceJvp (s := {S}) {W} lastNotOne 1 {DIMS} PROOF0 0 0",
+        }
+        return [(f"List.Nodup {DIMS}", ())], terms, [("jvp", "primal")]
     if prim == "broadcast_in_dim":
         n = len(p["shape"])
         SO, SH = lshape(p["so"]), lshape(p["shape"])
         BD = f"(dims {n} [{', '.join(map(str, p['bd']))}])"
-        primal = f"broadcastInDim (so := {SO}) {SH} {BD} PROOF0 PROOF1 0"
+        primal = f"broadcastInDim (so := {SO}) {D} {SH} {BD} PROOF0 PROOF1 0"
         terms = {
             "primal": primal,
-            "jvp": f"broadcastInDimJvp (so := {SO}) {SH} {BD} PROOF0 PROOF1 0 0",
-            "transpose": f"broadcastInDimTranspose {SO} {SH} {BD} PROOF1 0",
+            "jvp": f"broadcastInDimJvp (so := {SO}) {W} {SH} {BD} PROOF0 PROOF1 0 0",
+            "transpose": f"broadcastInDimTranspose {W} {SO} {SH} {BD} PROOF1 0",
         }
         args = [
             (f"BroadcastsTo {SO} ({SH} ∘ {BD})", ("BroadcastsTo",)),
@@ -1034,10 +1142,10 @@ def lean_spec(prim, p):
         )
         imp = f"{lo} {hi} {interior} PROOF0"
         terms = {
-            "primal": f"Lax.pad (s := {S}) (sv := {lshape(p['sv'])}) {imp} 0 0",
-            "jvp": f"padJvp (s := {S}) (sv := {lshape(p['sv'])}) {imp} 0 0 0 0",
-            "transpose_operand": f"padTransposeOperand {S} {imp} 0",
-            "transpose_padding_value": f"padTransposePaddingValue {S} {imp} 0",
+            "primal": f"Lax.pad (s := {S}) (sv := {lshape(p['sv'])}) {D} {imp} 0 0",
+            "jvp": f"padJvp (s := {S}) (sv := {lshape(p['sv'])}) {W} {imp} 0 0 0 0",
+            "transpose_operand": f"padTransposeOperand {W} {S} {imp} 0",
+            "transpose_padding_value": f"padTransposePaddingValue {W} {S} {imp} 0",
         }
         arg = f"∀ d, 0 ≤ {lo} d + {hi} d + dilateDim ({S} d) ({interior} d + 1)"
         vjp = [
@@ -1054,9 +1162,9 @@ def lean_spec(prim, p):
         )
         imp = f"{start} {limit} {strides}"
         terms = {
-            "primal": f"Lax.slice (s := {S}) {imp} PROOF0 PROOF1 PROOF2 0",
-            "jvp": f"sliceJvp (s := {S}) {imp} PROOF0 PROOF1 PROOF2 0 0",
-            "transpose": f"sliceTranspose {S} {imp} PROOF2 0",
+            "primal": f"Lax.slice (s := {S}) {D} {imp} PROOF0 PROOF1 PROOF2 0",
+            "jvp": f"sliceJvp (s := {S}) {W} {imp} PROOF0 PROOF1 PROOF2 0 0",
+            "transpose": f"sliceTranspose {W} {S} {imp} PROOF2 0",
         }
         args = [
             (f"∀ d, {limit} d ≤ {S} d", ()),
@@ -1065,30 +1173,37 @@ def lean_spec(prim, p):
         ]
         return args, terms, [("jvp", "primal"), ("transpose", p["s"])]
     if prim == "expand_dims":
-        S, D = lshape(p["s"]), lfinset(p["dims"], "ℕ")
-        arg = f"∀ i ∈ {D}, i < {len(p['s'])} + {D}.card"
-        return [(arg, ())], {"primal": f"expandDims (s := {S}) {D} PROOF0 0"}, []
+        S, DIMS = lshape(p["s"]), lfinset(p["dims"], "ℕ")
+        arg = f"∀ i ∈ {DIMS}, i < {len(p['s'])} + {DIMS}.card"
+        return [(arg, ())], {"primal": f"expandDims (s := {S}) {D} {DIMS} PROOF0 0"}, []
     if prim == "reshape":
         S, T = lshape(p["s"]), lshape(p["new"])
         arg = f"∏ d, {S} d = ∏ d, {T} d"
-        return [(arg, ())], {"primal": f"Lax.reshape (s := {S}) {T} PROOF0 0"}, []
+        return [(arg, ())], {"primal": f"Lax.reshape (s := {S}) {D} {T} PROOF0 0"}, []
     if prim == "maybe_broadcast":
         SX, T = lshape(p["sx"]), lshape(p["target"])
         arg = f"∏ d, {SX} d = ∏ a, ({SX} ∘ keptAxes {{d | {SX} d ≠ {T} d}}) a"
-        primal = f"maybeBroadcast (sx := {SX}) {T} PROOF0 0"
+        primal = f"maybeBroadcast (sx := {SX}) {D} {T} PROOF0 0"
         return [(arg, ())], {"primal": primal}, []
     if prim == "unbroadcast":
         SA, SX = lshape(p["sa"]), lshape(p["sx"])
         arg = f"BroadcastsTo {SA} {SX}"
-        return [(arg, ("BroadcastsTo",))], {"primal": f"unbroadcast (sx := {SX}) {SA} PROOF0 0"}, []
+        return (
+            [(arg, ("BroadcastsTo",))],
+            {"primal": f"unbroadcast (sx := {SX}) {W} {SA} PROOF0 0"},
+            [],
+        )
     if prim == "gather":
         SO, SI, DN, SS = lshape(p["so"]), lshape(p["si"]), lgather(p["dn"]), llist(p["ss"])
-        imp = f"(so := {SO}) (si := {SI}) {DN} {SS} {LMODE[p['mode']]}"
+        imp = f"(so := {SO}) (si := {SI}) {W} {WI} {DN} {SS} {LMODE[p['mode']]}"
         zero = "(fun _ => 0)"
         terms = {
             "primal": f"gather {imp} 0 PROOF0 PROOF1 0 {zero}",
             "jvp": f"gatherJvp {imp} PROOF0 PROOF1 0 0 {zero}",
-            "transpose": f"gatherTranspose {SO} (si := {SI}) {DN} {SS} {LMODE[p['mode']]} PROOF2 0 {zero}",
+            "transpose": (
+                f"gatherTranspose {W} {WI} {SO} (si := {SI}) {DN} {SS} {LMODE[p['mode']]} "
+                f"PROOF2 0 {zero}"
+            ),
         }
         args = [
             (f"GatherValid {SO} {SI} {DN} {SS}", ()),
@@ -1099,7 +1214,7 @@ def lean_spec(prim, p):
     if prim in SCATTER:
         name = SCATTER[prim]
         SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
-        imp = f"(so := {SO}) (si := {SI}) (su := {SU}) {DN} {LMODE[p['mode']]} PROOF0"
+        imp = f"(so := {SO}) (si := {SI}) (su := {SU}) {W} {WI} {DN} {LMODE[p['mode']]} PROOF0"
         zero = "(fun _ => 0)"
         terms = {
             "primal": f"{name} {imp} 0 {zero} 0",
@@ -1170,7 +1285,7 @@ def pad_partial(p, lin):
     )
     x, v = ("none" if c == "1" else "(some 0)" for c in lin)
     return (
-        f"(padTranspose (sv := {lshape(p['sv'])}) {lshape(p['s'])} {lo} {hi} {interior} PROOF0 0 "
+        f"(padTranspose (sv := {lshape(p['sv'])}) {lwidths(p)} {lshape(p['s'])} {lo} {hi} {interior} PROOF0 0 "
         f"{x} {v}).map (fun r => [r.1.isSome, r.2.isSome])"
     )
 
@@ -1181,8 +1296,8 @@ def scatter_partial(name, p, lin):
     SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
     x, u = ("none" if c == "1" else "(some 0)" for c in lin)
     return (
-        f"({name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {DN} {LMODE[p['mode']]} 0 "
-        f"{x} (fun _ => 0) {u}).map (fun r => (r.1.isSome, r.2.map shapeOf))"
+        f"({name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {lwidths(p)} {DN} {LMODE[p['mode']]} 0 "
+        f"{x} (fun _ => 0) {u}).map (fun r => (r.1.isSome, r.2.map typeOf))"
     )
 
 
@@ -1197,31 +1312,95 @@ def partial_want(prim, cts):
     if cts is None:
         return "none"
     if prim in SCATTER:
-        shape = "none" if cts[1] is None else f"some {llist(cts[1])}"
-        return f"some ({str(cts[0]).lower()}, {shape})"
+        ty = "none" if cts[1] is None else f"some {ltype(*cts[1])}"
+        return f"some ({str(cts[0]).lower()}, {ty})"
     return f"some [{', '.join(str(c).lower() for c in cts)}]"
 
 
-def larr(s):
-    return f"(⟨sh [{', '.join(map(str, s))}], 0⟩ : Arr)"
+def lwidths(p):
+    """The named arguments for the float width of the arrays and the integer width of the indices."""
+    w = LDT[p["dt"]].split(".")[-1]
+    return f"(w := .{w})" + (f" (wi := .{LDT[p['it']].split('.')[-1]})" if "it" in p else "")
 
 
-def lbatched(s, bdim):
-    return f"⟨{larr(s)}, {'none' if bdim is None else f'some {bdim}'}⟩"
+def larr(s, dt):
+    S = lshape(s)
+    return f"(⟨{S}, (0 : Tensor ({LDT[dt]}) (Index {S}))⟩ : Arr)"
+
+
+def lbatched(s, bdim, dt):
+    return f"⟨{larr(s, dt)}, {'none' if bdim is None else f'some {bdim}'}⟩"
 
 
 # Batching rules: the Lean term that is `none` if the rule raises,
-# and otherwise the shape and the batch axis of its result.
+# and otherwise the shape, the dtype and the batch axis of its result.
 BATCH = {
     "clamp_batch": lambda p: (
-        f"(clampBatch {' '.join(lbatched(s, d) for s, d in zip(p['shapes'], p['bdims']))})"
-        ".map (fun y => (y.val.shapeList, y.bdim))"
+        "(clampBatch "
+        + " ".join(
+            lbatched(s, d, dt)
+            for s, d, dt in zip(p["shapes"], p["bdims"], p.get("dts", [p["dt"]] * 3))
+        )
+        + ").map (fun y => (y.val.shapeList, y.val.dtype, y.bdim))"
     ),
     "cumsum_batch": lambda p: (
-        f"(cumsumBatch {p['axis']} {str(p['reverse']).lower()} {lbatched(p['shape'], p['bdim'])})"
-        ".map (fun y => (y.val.shapeList, y.bdim))"
+        f"(cumsumBatch {p['axis']} {str(p['reverse']).lower()} "
+        f"{lbatched(p['shape'], p['bdim'], p['dt'])})"
+        ".map (fun y => (y.val.shapeList, y.val.dtype, y.bdim))"
     ),
 }
+
+
+def dtype_term(p):
+    """The model's primitive of a case `dtypes` applied to arrays of its dtypes,
+    of the shapes that `jax_record` gives them."""
+    of, dts = p["of"], p["dts"]
+
+    def arr(i, s):
+        if dts[i] == "bool":
+            return f"(fun _ => true : Tensor ({LDT['bool']}) (Index {lshape(s)}))"
+        return f"(0 : Tensor ({LDT[dts[i]]}) (Index {lshape(s)}))"
+
+    v2 = lshape([2])
+    if of == "select_n":
+        return (
+            f"selectN (sw := {v2}) (s0 := {v2}) (s1 := {v2}) rfl (by unfold WhichShape; decide) "
+            f"{arr(0, [2])} {arr(1, [2])} {arr(2, [2])}"
+        )
+    if of == "clamp":
+        return (
+            f"Lax.clamp (sl := {lshape([])}) (sh := {lshape([])}) (s := {v2}) "
+            f"(by unfold WhichShape; decide) (by unfold WhichShape; decide) "
+            f"{arr(0, [])} {arr(1, [2])} {arr(2, [])}"
+        )
+    if of == "polynomial":
+        # The two coefficients, which the model takes as one family of arrays of one dtype.
+        SC = f"(![{v2}, {v2}] : Fin 2 → Shape 1)"
+        coeffs = f"(fun _ => 0 : (k : Fin 2) → Tensor ({LDT[dts[1]]}) (Index ({SC} k)))"
+        return (
+            f"Lax.polynomial (sx := {v2}) (sc := {SC}) "
+            f"(by unfold BroadcastableAll Broadcastable; decide) {arr(0, [2])} {coeffs}"
+        )
+    if of == "pad":
+        return (
+            f"Lax.pad (s := {v2}) (sv := {lshape([])}) (![1] : Fin 1 → ℤ) (![1] : Fin 1 → ℤ) "
+            f"(![0] : Fin 1 → ℕ) (by decide) {arr(0, [2])} {arr(1, [])}"
+        )
+    if of == "gather":
+        return (
+            f"gather (so := {lshape([3])}) (si := {lshape([2, 1])}) {lgather([[], [0], [0], [], []])} "
+            f"{llist([1])} {LMODE['fill']} 0 (by decide) (by decide) {arr(0, [3])} {arr(1, [2, 1])}"
+        )
+    if of in SCATTER:
+        return (
+            f"{SCATTER[of]} (so := {lshape([3])}) (si := {lshape([2, 1])}) (su := {v2}) "
+            f"{lscatter([[], [0], [0], [], []])} {LMODE['fill']} (by decide) "
+            f"{arr(0, [3])} {arr(1, [2, 1])} {arr(2, [2])}"
+        )
+    return (
+        f"Lax.{of} (sx := {v2}) (sy := {v2}) (by unfold Broadcastable; decide) "
+        f"{arr(0, [2])} {arr(1, [2])}"
+    )
 
 
 def fill(term, args):
@@ -1230,8 +1409,8 @@ def fill(term, args):
     return term
 
 
-def shape_eq(term, args, shape):
-    return f"shapeOf ({fill(term, args)}) = {llist(shape)}"
+def type_eq(term, args, res):
+    return f"typeOf ({fill(term, args)}) = {ltype(res['shape'], res['dtype'])}"
 
 
 def neg_args(args):
@@ -1354,10 +1533,15 @@ def assertions(prim, p, rec):
     """The Lean propositions that the case asserts, with names, and the tactic that proves them.
 
     Returns `(expected, [(name, proposition, tactic)])`, where `expected` names an expected disagreement.
+    An assertion without a tactic is a command: `#check` or `#check_failure`.
     """
+    if prim == "dtypes":
+        # JAX raises exactly when Lean rejects the arrays of these dtypes.
+        check = "#check" if "error" not in rec["primal"] else "#check_failure"
+        return None, [("dtypes", f"{check} {dtype_term(p)}", None)]
     if prim in BATCH:
         res = rec["batch"]["result"]
-        want = "none" if res is None else f"some ({llist(res[0])}, some {res[1]})"
+        want = "none" if res is None else f"some ({llist(res[0])}, {LDT[res[1]]}, some {res[2]})"
         out = [("batch", f"{BATCH[prim](p)} = {want}", "decide")]
         # `vmap` raises exactly when the rule does.
         if (res is None) != (rec["batch"]["user"] is None):
@@ -1379,7 +1563,7 @@ def assertions(prim, p, rec):
     known = {}
 
     def ref(name):
-        return llist(known[name]) if name in known else f"shapeOf ({fill(terms[name], args)})"
+        return ltype(*known[name]) if name in known else f"typeOf ({fill(terms[name], args)})"
 
     for name, term in terms.items():
         if name not in rec:
@@ -1390,8 +1574,8 @@ def assertions(prim, p, rec):
             prop, tac = neg_args(rule_args)
             out.append((f"{name} rejects", prop, tac))
         else:
-            out.append((name, shape_eq(term, args, rec[name]["shape"]), "decide"))
-            known[name] = rec[name]["shape"]
+            out.append((name, type_eq(term, args, rec[name]), "decide"))
+            known[name] = (rec[name]["shape"], rec[name]["dtype"])
     if "fwd" in rec:
         forwarded = "true" if rec["fwd"]["forwarded"] else "false"
         out.append(("fwd", f"{FWD[prim](p)} = {forwarded}", "decide"))
@@ -1408,15 +1592,15 @@ def assertions(prim, p, rec):
         )
         out.append(("positions", f"{POSITIONS[prim](p, js)} = [{pos}]", "decide"))
     if "user_jvp" in rec:
-        # A comparison has no rule term: its zero tangent has the shape of the primal output.
+        # A comparison has no rule term: its zero tangent has the shape of the primal output,
+        # and the tangent dtype of its dtype.
         jvps = [n for n in terms if n.startswith("jvp")] or ["primal"]
         if "error" in rec["user_jvp"]:
             out.append(("user_jvp rejects", "False", "decide"))
         else:
             for n in jvps:
-                out.append(
-                    (f"user_jvp = {n}", f"{llist(rec['user_jvp']['shape'])} = {ref(n)}", "decide")
-                )
+                user = ltype(rec["user_jvp"]["shape"], rec["user_jvp"]["dtype"])
+                out.append((f"user_jvp = {n}", f"{user} = tangentOf {ref(n)}", "decide"))
     # A rule that reverse mode calls raises: this is asserted above, and reverse mode raises too.
     rule_raises = any("error" in rec.get(t, {}) for t, _ in vjp) or (
         "partial" in rec and rec["partial"].get("1" * len(VJP_INPUTS[prim])) is None
@@ -1427,16 +1611,21 @@ def assertions(prim, p, rec):
             out.append(("user_vjp", "False", "decide"))
     elif "user_vjp" in rec and vjp:
         conj = " ∧ ".join(
-            f"({ref(t)} = {ref(o) if isinstance(o, str) else llist(o)})" for t, o in vjp
+            f"({ref(t)} = {ref(o) if isinstance(o, str) else ltype(o, p['dt'])})" for t, o in vjp
         )
         if "error" in rec["user_vjp"]:
             out.append(("user_vjp rejects", f"¬ ({conj})", "decide"))
         else:
-            # Reverse mode succeeds: the model's rules have the right shapes,
-            # and the cotangents have the shapes of the inputs.
-            got = rec["user_vjp"].get("shapes") or [rec["user_vjp"]["shape"]]
+            # Reverse mode succeeds: the model's rules have the right shapes and dtypes,
+            # and the cotangents have the shapes and dtypes of the inputs.
+            uv = rec["user_vjp"]
+            got = (
+                list(zip(uv["shapes"], uv["dtypes"]))
+                if "shapes" in uv
+                else [(uv["shape"], uv["dtype"])]
+            )
             want = [p[k] for k in VJP_INPUTS[prim]]
-            cts = " ∧ ".join(f"({llist(g)} = {llist(w)})" for g, w in zip(got, want))
+            cts = " ∧ ".join(f"({ltype(*g)} = {ltype(w, p['dt'])})" for g, w in zip(got, want))
             if len(got) != len(want):
                 cts = "False"
             out.append(("user_vjp", f"{conj} ∧ {cts}", "decide"))
@@ -1449,8 +1638,12 @@ open Jax Jax.Lax
 
 set_option linter.all false
 
-/-- The shape in the type of an array of scalars or booleans, as a list. -/
-def shapeOf {n : ℕ} {s : Shape n} {α : Type} (_ : Index s → α) : List ℕ := List.ofFn s
+/-- The shape and the dtype in the type of an array. -/
+def typeOf {n : ℕ} {s : Shape n} {d : DType} (_ : Tensor d (Index s)) : List ℕ × DType :=
+  (List.ofFn s, d)
+
+/-- The shape and the dtype of the tangent of an array of the shape and dtype `t`. -/
+def tangentOf (t : List ℕ × DType) : List ℕ × DType := (t.1, t.2.tangent)
 
 /-- The shape with the sizes `l`. -/
 abbrev sh (l : List ℕ) : Shape l.length := fun d => l.get d
@@ -1480,6 +1673,10 @@ def write_lean(path, items, split):
     for idx, (cid, asserts) in items:
         lines.append(f"-- {cid}")
         for group in ([a] for a in asserts) if split else [asserts]:
+            if group[0][2] is None:
+                lines.append(group[0][1])
+                where[len(lines)] = (idx, group[0][0])
+                continue
             props = " ∧ ".join(f"({prop})" for _, prop, _ in group)
             tacs = [tac for _, _, tac in group]
             proof = (
@@ -1533,7 +1730,7 @@ def reduce_file(path, items):
         lines.append(f'#eval IO.println "-- {cid.replace('"', "")}"')
         for name, term in terms:
             lines.append(f'#eval IO.println "{name}:"')
-            lines.append(f"#reduce shapeOf ({term})")
+            lines.append(f"#reduce typeOf ({term})")
     path.write_text("\n".join(lines) + "\n")
     run = lean(path)
     return run.stdout
@@ -1612,6 +1809,8 @@ def main():
     red = []
     for idx, (cid, _) in sel:
         prim, p = cases[idx]
+        if prim in BATCH or prim == "dtypes":
+            continue
         a, terms, _ = lean_spec(prim, p)
         red.append((idx, (cid, [(n, fill(t, a)) for n, t in terms.items()])))
     shown = reduce_file(GEN / "Reduce.lean", red)

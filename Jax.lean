@@ -1,6 +1,7 @@
 module
 
 public import Jax.Core
+public import Jax.DType
 public import Jax.Jaxpr.MaxInitial
 public import Jax.Jaxpr.SelectNan
 public import Jax.Jaxpr.SqrtRelu

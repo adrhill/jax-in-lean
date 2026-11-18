@@ -29,11 +29,11 @@ namespace Jax.Jaxpr
 
 open Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- `jnp.max(x, axis=axes, initial=0.)`, as `max(0, reduce_max(x, axes))`. -/
-noncomputable def maxInitial (axes : Finset (Fin n)) (x : Tensor (Index s)) :
-    Tensor (Index (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes))) :=
+noncomputable def maxInitial (axes : Finset (Fin n)) (x : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes))) :=
   Lax.max (.refl _) 0 (reduceMax axes x)
 
 theorem reduceMaxJvpShape_ofFn (s : Shape n) (axes : Finset (Fin n)) :
@@ -43,7 +43,7 @@ theorem reduceMaxJvpShape_ofFn (s : Shape n) (axes : Finset (Fin n)) :
 /-- Forward mode: the JVP rule of `reduce_max`, then the rule of `max` for its second argument.
 The constant `0.0` has a symbolic zero tangent, so the rule of `max` for its first argument is not evaluated.
 The tangent of `reduce_max` has the shape of `b` (`reduceMaxJvpShape_eq`) and is read as an array of that shape. -/
-noncomputable def maxInitialJvp (axes : Finset (Fin n)) (g x : Tensor (Index s)) :=
+noncomputable def maxInitialJvp (axes : Finset (Fin n)) (g x : Tensor (.float w) (Index s)) :=
   maxJvpRight (.refl _)
     (fun j => reduceMaxJvp axes g (reduceMax axes x) x (Index.castShape (reduceMaxJvpShape_ofFn s axes) j))
     0 (reduceMax axes x)
@@ -54,7 +54,7 @@ private theorem isEmpty_index (hs : ∃ d, s d = 0) : IsEmpty (Index s) := by
   exact ⟨fun i => by have := (i d).isLt; omega⟩
 
 /-- Over an empty axis, `reduce_max` is `-∞` and `jnp.max(x, initial=0.)` is `0`. -/
-theorem maxInitial_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (x : Tensor (Index s)) :
+theorem maxInitial_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (x : Tensor (.float w) (Index s)) :
     maxInitial axes x = 0 := by
   have := isEmpty_index hs
   funext j
@@ -64,8 +64,8 @@ theorem maxInitial_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (x : T
 
 /-- Over an empty axis, `jnp.max(x, initial=0.)` is constant, so its derivative is `0`. -/
 theorem maxInitial_hasZeroJvp (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) :
-    IsJvpOf (fun _ _ => (0 : Tensor (Index (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes)))))
-      (maxInitial (s := s) axes) := by
+    IsJvpOf (fun _ _ => (0 : Tensor (.float w) (Index (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes)))))
+      (maxInitial (s := s) (w := w) axes) := by
   intro x _
   refine ⟨fun _ => 0, 0, .of_forall fun y => ?_, hasFDerivAt_const _ _, fun g => .of_eq ?_⟩
   · rw [maxInitial_of_empty axes hs]
@@ -73,7 +73,7 @@ theorem maxInitial_hasZeroJvp (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) :
   · rfl
 
 /-- Over an empty axis, forward mode returns NaN: `(0 / 0) * 0`. -/
-theorem maxInitialJvp_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (g x : Tensor (Index s))
+theorem maxInitialJvp_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (g x : Tensor (.float w) (Index s))
     (j : Index (broadcastShape (s ∘ keptAxes axes) (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes)))) :
     maxInitialJvp axes g x j = .nan := by
   simp only [maxInitialJvp, maxJvpRight, mul, binop, reduceMaxJvp_of_isEmpty axes hs]
@@ -83,11 +83,11 @@ theorem maxInitialJvp_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (g 
 and the result is not empty. -/
 theorem maxInitialJvp_not_correct (axes : Finset (Fin n)) (hs : ∃ d, s d = 0)
     (j₀ : Index (s ∘ keptAxes axes)) :
-    ¬ IsJvpOf (maxInitialJvp axes) (maxInitial (s := s) axes) := by
+    ¬ IsJvpOf (maxInitialJvp axes) (maxInitial (s := s) (w := w) axes) := by
   intro hj
   have := isEmpty_index hs
   obtain ⟨_, L, -, -, hrule⟩ := hj isEmptyElim (Set.mem_univ _)
-  obtain ⟨hr, -, hv⟩ := hrule isEmptyElim
+  obtain ⟨_, hr, -, hv⟩ := hrule isEmptyElim
   let j : Index (broadcastShape (s ∘ keptAxes axes)
       (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes))) :=
     fun d => ⟨j₀ d, by simp [broadcastShape]⟩
@@ -97,7 +97,7 @@ theorem maxInitialJvp_not_correct (axes : Finset (Fin n)) (hs : ∃ d, s d = 0)
 
 /-- The case of the reproducer: `jnp.max(x, initial=0.)` for `x` of shape `(0,)`. -/
 theorem maxInitialJvp_not_correct_vector :
-    ¬ IsJvpOf (maxInitialJvp (s := ![0]) {0}) (maxInitial (s := ![0]) {0}) :=
+    ¬ IsJvpOf (maxInitialJvp (s := ![0]) {0}) (maxInitial (s := ![0]) (w := w) {0}) :=
   maxInitialJvp_not_correct _ ⟨0, rfl⟩ fun d => (Fin.cast (by decide) d).elim0
 
 end Jax.Jaxpr

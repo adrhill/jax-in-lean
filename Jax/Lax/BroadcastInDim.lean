@@ -17,7 +17,7 @@ and forwards the operand instead of its transpose for `broadcast_dimensions = (1
 
 namespace Jax.Lax
 
-variable {m n : ℕ} {so : Shape m}
+variable {m n : ℕ} {so : Shape m} {w : FloatWidth} {d : DType}
 
 /-- The JVP rule of `broadcast_in_dim`, which applies the primitive to the tangent.
 `jax/_src/lax/lax.py:7609`:
@@ -28,14 +28,14 @@ variable {m n : ℕ} {so : Shape m}
 ``` -/
 def broadcastInDimJvp (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : Function.Injective broadcastDimensions)
-    (operandDot _operand : Tensor (Index so)) : Tensor (Index shape) :=
+    (operandDot _operand : Tensor (.float w) (Index so)) : Tensor (.float w) (Index shape) :=
   broadcastInDim shape broadcastDimensions h hd operandDot
 
 /-- The JVP rule of `broadcast_in_dim` computes the derivative of `broadcast_in_dim`. -/
 theorem broadcastInDimJvp_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : Function.Injective broadcastDimensions) :
     IsJvpOf (broadcastInDimJvp shape broadcastDimensions h hd)
-      (broadcastInDim shape broadcastDimensions h hd) :=
+      (broadcastInDim (d := .float w) shape broadcastDimensions h hd) :=
   isJvpOf_of_linear
     { toFun := fun x j => x ((j.proj broadcastDimensions).unbroadcast h)
       map_add' := fun _ _ => rfl
@@ -107,7 +107,7 @@ def _broadcast_in_dim_transpose_rule(ct, operand,
 ``` -/
 noncomputable def broadcastInDimTranspose (so : Shape m) (shape : Shape n)
     (broadcastDimensions : Fin m → Fin n) (hd : Function.Injective broadcastDimensions)
-    (ct : Tensor (Index shape)) :=
+    (ct : Tensor (.float w) (Index shape)) :=
   expandDims (s := shape ∘ keptAxes (broadcastInDimTransposeAxes so broadcastDimensions))
     ((unitDims so).map Fin.valEmbedding) (broadcastInDimTranspose_canonicalize hd)
     (reduceSum (broadcastInDimTransposeAxes so broadcastDimensions) ct)
@@ -139,7 +139,7 @@ if `broadcast_dimensions` is strictly increasing. -/
 theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : StrictMono broadcastDimensions) :
     IsTransposeOf (broadcastInDimTranspose so shape broadcastDimensions hd.injective)
-      (broadcastInDim shape broadcastDimensions h hd.injective) := by
+      (broadcastInDim (d := .float w) shape broadcastDimensions h hd.injective) := by
   intro ct x
   have hAc := card_compl_broadcastInDimTransposeAxes (so := so) hd.injective
   have hN := broadcastInDimTranspose_rank (so := so) hd.injective
@@ -154,7 +154,7 @@ theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions :
     ((h _).resolve_left (unitDims_notMem.1 (keptAxes_notMem _ c))).symm
   refine ⟨fun j => x ((j.proj broadcastDimensions).unbroadcast h),
     fun i => ∑ j with (j.proj broadcastDimensions).unbroadcast h = i, ct j, rfl,
-    ⟨hN, fun p => ?_, fun q i hq => ?_⟩, ?_⟩
+    ⟨rfl, hN, fun p => ?_, fun q i hq => ?_⟩, ?_⟩
   · -- The shape of the result is the shape of the operand.
     unfold expandDimsShape
     split_ifs with hp
@@ -209,9 +209,10 @@ for an operand of shape `(3, 2)` and a result of shape `(2, 3)`,
 it returns a cotangent of shape `(2, 3)` instead of `(3, 2)`. -/
 theorem broadcastInDimTranspose_not_correct :
     ¬ IsTransposeOf (broadcastInDimTranspose ![3, 2] ![2, 3] ![1, 0] (by decide))
-      (broadcastInDim (so := ![3, 2]) ![2, 3] ![1, 0] (by unfold BroadcastsTo; decide) (by decide)) := by
+      (broadcastInDim (d := .float w) (so := ![3, 2]) ![2, 3] ![1, 0] (by unfold BroadcastsTo; decide)
+        (by decide)) := by
   intro htr
-  obtain ⟨_, _, _, ⟨hN, hs, _⟩, _⟩ := htr 0 0
+  obtain ⟨_, _, _, ⟨_, hN, hs, _⟩, _⟩ := htr 0 0
   -- Axis 0 of the result of the rule has size 2, and axis 0 of the operand has size 3.
   have h0 := hs ⟨0, by decide⟩
   rw [show Fin.cast hN ⟨0, _⟩ = (0 : Fin 2) from rfl] at h0
@@ -242,7 +243,7 @@ if `broadcast_dimensions` is strictly increasing. -/
 theorem broadcastInDimFwd_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : StrictMono broadcastDimensions) :
     IsFwdOf (broadcastInDimFwd so shape broadcastDimensions)
-      (broadcastInDim shape broadcastDimensions h hd.injective) := by
+      (broadcastInDim (d := d) shape broadcastDimensions h hd.injective) := by
   intro hf x
   have hf' : List.ofFn shape = List.ofFn so := beq_iff_eq.1 hf
   obtain rfl : n = m := by simpa using congrArg List.length hf'
@@ -259,10 +260,11 @@ theorem broadcastInDimFwd_correct (shape : Shape n) (broadcastDimensions : Fin m
 for an operand of shape `(2, 2)`, the result is its transpose, and the rule forwards the operand. -/
 theorem broadcastInDimFwd_not_correct :
     ¬ IsFwdOf (broadcastInDimFwd ![2, 2] ![2, 2] ![1, 0])
-      (broadcastInDim (so := ![2, 2]) ![2, 2] ![1, 0] (by unfold BroadcastsTo; decide) (by decide)) := by
+      (broadcastInDim (d := .float w) (so := ![2, 2]) ![2, 2] ![1, 0] (by unfold BroadcastsTo; decide)
+        (by decide)) := by
   intro hf
   -- The array `[[0, 1], [0, 1]]`, whose entry `(0, 1)` differs from the entry `(1, 0)`.
-  obtain ⟨_, _, he⟩ := hf (by decide) (ofReal fun i => ((i 1 : ℕ) : ℝ))
+  obtain ⟨_, _, _, he⟩ := hf (by decide) (ofReal fun i => ((i 1 : ℕ) : ℝ))
   let i : Index (![2, 2] : Shape 2) := fun d => ⟨d, by fin_cases d <;> decide⟩
   have := he i i fun _ => rfl
   simp [i, ofReal, broadcastInDim, Index.proj, Index.unbroadcast] at this

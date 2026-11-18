@@ -31,31 +31,31 @@ namespace Jax.Jaxpr
 
 open Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The predicate `False`, a scalar. -/
-def falseWhich : Index (![] : Shape 0) → Bool := fun _ => false
+def falseWhich : Tensor .bool (Index (![] : Shape 0)) := fun _ => false
 
 theorem whichShape_scalar (s : Shape n) : WhichShape (![] : Shape 0) s := .inl rfl
 
 /-- The function of jax-ml/jax#20601, `select(False, β * x, 1.0)`, which is `select_n(False, 1.0, β * x)`. -/
-noncomputable def selectNan (β x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def selectNan (β x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   selectN rfl (whichShape_scalar _) falseWhich 1 (mul (.refl s) β x)
 
 /-- Reverse mode in `β`: the transpose rules of `select_n` for the case `β * x`
 and of `mul` for its first argument applied in turn to the cotangent `ct`. -/
-noncomputable def selectNanVjp (x : Tensor (Index s)) (ct : Tensor (Index (broadcastShape s s))) :
-    Tensor (Index s) :=
+noncomputable def selectNanVjp (x : Tensor (.float w) (Index s)) (ct : Tensor (.float w) (Index (broadcastShape s s))) :
+    Tensor (.float w) (Index s) :=
   mulTransposeLeft (.refl s) x (selectNTranspose1 (whichShape_scalar _) falseWhich ct)
 
 /-- The function is the constant `1`, also if `x` is NaN. -/
-theorem selectNan_eq_one (β x : Tensor (Index s)) : selectNan β x = 1 := by
+theorem selectNan_eq_one (β x : Tensor (.float w) (Index s)) : selectNan β x = 1 := by
   funext j
   simp [selectNan, selectN, falseWhich]
 
 /-- Reverse mode sums the products of the cotangent `0` with entries of `x`
 over the nonempty set of entries that are broadcast from `i`. -/
-private theorem selectNanVjp_apply (x : Tensor (Index s)) (ct : Tensor (Index (broadcastShape s s)))
+private theorem selectNanVjp_apply (x : Tensor (.float w) (Index s)) (ct : Tensor (.float w) (Index (broadcastShape s s)))
     (i : Index s) : ∃ S : Finset (Index (broadcastShape (broadcastShape s s) s)), S.Nonempty ∧
       ∃ f : Index (broadcastShape (broadcastShape s s) s) → Index s,
         selectNanVjp x ct i = ∑ j ∈ S, 0 * x (f j) := by
@@ -67,12 +67,12 @@ private theorem selectNanVjp_apply (x : Tensor (Index s)) (ct : Tensor (Index (b
   · simp only [mul, binop, selectNTranspose1, selectN, falseWhich, Bool.false_eq_true, ↓reduceIte,
       Pi.zero_apply]
 
-private theorem nan_add (a : Scalar) : Scalar.nan + a = .nan := by
+private theorem nan_add (a : Scalar w) : Scalar.nan + a = .nan := by
   cases a <;> rfl
 
 /-- For `x = NaN`, reverse mode returns NaN: the cotangent `0` of the unused case times NaN. -/
 theorem selectNanVjp_nan (ct : Index (broadcastShape s s) → ℝ) :
-    selectNanVjp (fun _ => .nan) (ofReal ct) = fun _ => .nan := by
+    selectNanVjp (w := w) (fun _ => .nan) (ofReal ct) = fun _ => .nan := by
   funext i
   obtain ⟨S, ⟨a, ha⟩, f, h⟩ := selectNanVjp_apply (fun _ => .nan) (ofReal ct) i
   rw [h, ← Finset.add_sum_erase S _ ha]
@@ -80,7 +80,7 @@ theorem selectNanVjp_nan (ct : Index (broadcastShape s s) → ℝ) :
 
 /-- For finite `x`, reverse mode returns `0`, the transpose of the zero derivative. -/
 theorem selectNanVjp_finite (x : Index s → ℝ) (ct : Index (broadcastShape s s) → ℝ) :
-    selectNanVjp (ofReal x) (ofReal ct) = ofReal 0 := by
+    selectNanVjp (w := w) (ofReal x) (ofReal ct) = ofReal 0 := by
   funext i
   obtain ⟨S, -, f, h⟩ := selectNanVjp_apply (ofReal x) (ofReal ct) i
   rw [h, Finset.sum_eq_zero fun j _ => ?_]
@@ -89,7 +89,7 @@ theorem selectNanVjp_finite (x : Index s → ℝ) (ct : Index (broadcastShape s 
 
 /-- No transpose rule is correct for `β ↦ β * NaN`: it does not map real arrays to real arrays. -/
 theorem mul_nan_not_isTransposeOf [Nonempty (Index s)]
-    (tr : Tensor (Index (broadcastShape s s)) → Tensor (Index s)) :
+    (tr : Tensor (.float w) (Index (broadcastShape s s)) → Tensor (.float w) (Index s)) :
     ¬ IsTransposeOf tr (mul (.refl s) · fun _ => .nan) := by
   intro htr
   obtain ⟨y, -, hy, -⟩ := htr 0 0

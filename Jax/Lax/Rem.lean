@@ -16,7 +16,7 @@ It is differentiable where `y ≠ 0` and `x / y` is not a nonzero integer, and t
 
 namespace Jax.Lax
 
-variable {n : ℕ} {sx sy : Shape n}
+variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `rem` for its first argument, which broadcasts the tangent to the shape of the result.
 The proof `_h` is the shape check of `broadcast_shapes`, and sharding is dropped.
@@ -26,8 +26,8 @@ lambda g, x, y: _maybe_broadcast(
     broadcast_shapes(np.shape(x), np.shape(y)), g,
     broadcast_shardings(typeof(x), typeof(y))),
 ``` -/
-def remJvpLeft (_h : Broadcastable sx sy) (g _x : Tensor (Index sx)) (_y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sx sy)) :=
+def remJvpLeft (_h : Broadcastable sx sy) (g _x : Tensor (.float w) (Index sx)) (_y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx sy)) :=
   maybeBroadcast (broadcastShape sx sy) (prod_maybeBroadcast (broadcastsTo_left sx sy)) g
 
 theorem remJvpRight_broadcastable (h : Broadcastable sx sy) :
@@ -39,9 +39,9 @@ theorem remJvpRight_broadcastable (h : Broadcastable sx sy) :
 /-- The JVP rule of `rem` for its second argument.
 `jax/_src/lax/lax.py:5639`:
 `lambda g, x, y: mul(neg(g), mul(sign(div(x, y)), floor(abs(div(x, y)))))` -/
-noncomputable def remJvpRight (h : Broadcastable sx sy) (g : Tensor (Index sy))
-    (x : Tensor (Index sx)) (y : Tensor (Index sy)) :
-    Tensor (Index (broadcastShape sy
+noncomputable def remJvpRight (h : Broadcastable sx sy) (g : Tensor (.float w) (Index sy))
+    (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sy
       (broadcastShape (broadcastShape sx sy) (broadcastShape sx sy)))) :=
   mul (remJvpRight_broadcastable h) (neg g)
     (mul (.refl _) (sign (div h x y)) (floor (abs (div h x y))))
@@ -98,7 +98,7 @@ private theorem truncReal_eventuallyEq {q : ℝ} (hq : ∀ k : ℤ, k ≠ 0 → 
 /-- The right rule of `rem` on finite arrays where `y` has no zeros. -/
 private theorem remJvpRight_same (h : Broadcastable sx sy) (k : Index sy → ℝ) (x : Index sx → ℝ)
     (y : Index sy → ℝ) (hy : ∀ j : Index (broadcastShape sx sy), y (j.unbroadcast h.right) ≠ 0) :
-    (remJvpRight h (ofReal k) (ofReal x) (ofReal y)).Same (ofReal fun j =>
+    (remJvpRight (w := w) h (ofReal k) (ofReal x) (ofReal y)).Same (ofReal (w := w) fun j =>
       -k (j.unbroadcast h.right) *
         (Real.sign (x (j.unbroadcast (broadcastsTo_left sx sy)) / y (j.unbroadcast h.right)) *
           ⌊|x (j.unbroadcast (broadcastsTo_left sx sy)) / y (j.unbroadcast h.right)|⌋)) := by
@@ -124,7 +124,7 @@ private theorem remJvpRight_same (h : Broadcastable sx sy) (k : Index sy → ℝ
 /-- The JVP rules of `rem` compute the derivative of `rem`
 where the divisor has no zeros and no quotient is a nonzero integer. -/
 theorem remJvp_correct (h : Broadcastable sx sy) :
-    IsJvp₂OfOn (remJvpLeft h) (remJvpRight h) (rem h)
+    IsJvp₂OfOn (remJvpLeft h) (remJvpRight h) (rem (w := w) h)
       {p | ∀ j : Index (broadcastShape sx sy), p.2 (j.unbroadcast h.right) ≠ 0 ∧
         ∀ k : ℤ, k ≠ 0 →
           p.1 (j.unbroadcast (broadcastsTo_left sx sy)) ≠ k * p.2 (j.unbroadcast h.right)} := by
@@ -171,7 +171,7 @@ theorem remJvp_correct (h : Broadcastable sx sy) :
 No other rule would be correct there either, so this is a convention of JAX and not a bug.
 The counterexample has shape `(1,)` and `x = y = 0`. -/
 theorem remJvp_not_correct :
-    ¬ IsJvp₂Of (remJvpLeft (.refl ![1])) (remJvpRight (.refl ![1])) (rem (.refl ![1])) := by
+    ¬ IsJvp₂Of (remJvpLeft (.refl ![1])) (remJvpRight (.refl ![1])) (rem (w := w) (.refl ![1])) := by
   intro hrem
   obtain ⟨F, L, hF, -, -⟩ := hrem 0 0 (Set.mem_univ _)
   have := congrFun hF.self_of_nhds fun _ => ⟨0, by simp [broadcastShape]⟩

@@ -14,25 +14,25 @@ The transpose rules are correct also for operands that are broadcast.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {sx sy : Shape n}
+variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `mul` for its first argument.
 `ad.defbilinear(mul_p, …)` at `jax/_src/lax/lax.py:5591` replaces the rules of `ad.defjvp` at line 5582.
 `jax/_src/interpreters/ad.py:1006`: `lhs_jvp = lambda g, x, y, **kwargs: prim.bind(g, y, **kwargs)` -/
-noncomputable def mulJvpLeft (h : Broadcastable sx sy) (xdot _x : Tensor (Index sx))
-    (y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def mulJvpLeft (h : Broadcastable sx sy) (xdot _x : Tensor (.float w) (Index sx))
+    (y : Tensor (.float w) (Index sy)) : Tensor (.float w) (Index (broadcastShape sx sy)) :=
   mul h xdot y
 
 /-- The JVP rule of `mul` for its second argument.
 `ad.defbilinear(mul_p, …)` at `jax/_src/lax/lax.py:5591` replaces the rules of `ad.defjvp` at line 5582.
 `jax/_src/interpreters/ad.py:1007`: `rhs_jvp = lambda g, x, y, **kwargs: prim.bind(x, g, **kwargs)` -/
-noncomputable def mulJvpRight (h : Broadcastable sx sy) (ydot : Tensor (Index sy))
-    (x : Tensor (Index sx)) (_y : Tensor (Index sy)) : Tensor (Index (broadcastShape sx sy)) :=
+noncomputable def mulJvpRight (h : Broadcastable sx sy) (ydot : Tensor (.float w) (Index sy))
+    (x : Tensor (.float w) (Index sx)) (_y : Tensor (.float w) (Index sy)) : Tensor (.float w) (Index (broadcastShape sx sy)) :=
   mul h x ydot
 
 /-- The JVP rules of `mul` compute the derivative of `mul`. -/
 theorem mulJvp_correct (h : Broadcastable sx sy) :
-    IsJvp₂Of (mulJvpLeft h) (mulJvpRight h) (mul h) := by
+    IsJvp₂Of (mulJvpLeft h) (mulJvpRight h) (mul (w := w) h) := by
   intro x y _
   let ux : Index (broadcastShape sx sy) → Index sx :=
     fun j => j.unbroadcast (broadcastsTo_left sx sy)
@@ -71,8 +71,8 @@ def _mul_transpose_left(ct, x, y, *, out_dtype):
   g = mul(ct, y, out_dtype=None if out_dtype is None else x.aval.dtype)
   return _unbroadcast(x.aval, g)
 ``` -/
-noncomputable def mulTransposeLeft (h : Broadcastable sx sy) (y : Tensor (Index sy))
-    (ct : Tensor (Index (broadcastShape sx sy))) : Tensor (Index sx) :=
+noncomputable def mulTransposeLeft (h : Broadcastable sx sy) (y : Tensor (.float w) (Index sy))
+    (ct : Tensor (.float w) (Index (broadcastShape sx sy))) : Tensor (.float w) (Index sx) :=
   unbroadcast sx (mulTransposeLeft_broadcastsTo h) (mul h.right.broadcastable.symm ct y)
 
 /-- The transpose rule of `mul` for its second argument.
@@ -83,13 +83,13 @@ def _mul_transpose_right(ct, x, y, *, out_dtype):
   g = mul(x, ct, out_dtype=None if out_dtype is None else y.aval.dtype)
   return _unbroadcast(y.aval, g)
 ``` -/
-noncomputable def mulTransposeRight (h : Broadcastable sx sy) (x : Tensor (Index sx))
-    (ct : Tensor (Index (broadcastShape sx sy))) : Tensor (Index sy) :=
+noncomputable def mulTransposeRight (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx))
+    (ct : Tensor (.float w) (Index (broadcastShape sx sy))) : Tensor (.float w) (Index sy) :=
   unbroadcast sy (mulTransposeRight_broadcastsTo h) (mul (broadcastable_left sx sy) x ct)
 
 /-- The transpose rule of `mul` for its first argument transposes `mul` with a fixed second argument. -/
 theorem mulTransposeLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ) :
-    IsTransposeOf (mulTransposeLeft h (ofReal y)) (mul h · (ofReal y)) := by
+    IsTransposeOf (mulTransposeLeft h (ofReal y)) (mul (w := w) h · (ofReal y)) := by
   intro ct x
   let ux : Index (broadcastShape sx sy) → Index sx := fun j => j.unbroadcast (broadcastsTo_left sx sy)
   let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right
@@ -114,7 +114,7 @@ theorem mulTransposeLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ
 
 /-- The transpose rule of `mul` for its second argument transposes `mul` with a fixed first argument. -/
 theorem mulTransposeRight_correct (h : Broadcastable sx sy) (x : Index sx → ℝ) :
-    IsTransposeOf (mulTransposeRight h (ofReal x)) (mul h (ofReal x) ·) := by
+    IsTransposeOf (mulTransposeRight h (ofReal x)) (mul (w := w) h (ofReal x) ·) := by
   intro ct y
   let ux : Index (broadcastShape sx sy) → Index sx := fun j => j.unbroadcast (broadcastsTo_left sx sy)
   let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right

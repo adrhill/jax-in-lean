@@ -13,15 +13,15 @@ Differentiation rules of the `cos` primitive of `jax/_src/lax/lax.py`.
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `cos`.
 `jax/_src/lax/lax.py:4953`: `lambda g, x, accuracy: neg(mul(g, sin(x, accuracy=accuracy)))` -/
-noncomputable def cosJvp (g x : Tensor (Index s)) : Tensor (Index (broadcastShape s s)) :=
+noncomputable def cosJvp (g x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
   neg (mul (.refl s) g (sin x))
 
 /-- The JVP rule of `cos` computes the derivative of `cos`. -/
-theorem cosJvp_correct : IsJvpOf cosJvp (cos (ι := Index s)) := by
+theorem cosJvp_correct : IsJvpOf cosJvp (cos (ι := Index s) (w := w)) := by
   intro x _
   refine ⟨fun y i => Real.cos (y i),
     ContinuousLinearMap.pi fun i => (-Real.sin (x i)) • ContinuousLinearMap.proj i, ?_, ?_, ?_⟩

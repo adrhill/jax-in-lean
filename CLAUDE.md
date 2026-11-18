@@ -8,10 +8,11 @@ Sister repository of `../asdex`.
 ```
 Jax.lean, Jax/      # Model of JAX and proofs about it
 ├── Scalar.lean     # Array entries: reals, infinities and NaN
+├── DType.lean      # Dtypes: bool, int and float widths, float0, and tangent dtypes
 ├── Shape.lean      # Shape, Index, broadcasting
 ├── Core.lean       # Tensor, IsJvpOf, IsJvp₂Of, IsTransposeOf and variants, Arr, IsBatchOf₁, IsBatchOf₃
 ├── Lax/Primal.lean # Primal semantics of every primitive, and helpers that rules call
-├── Lax/Dynamic.lean # The primitives on arrays of any shape: `none` if a shape check fails
+├── Lax/Dynamic.lean # The primitives on arrays of any shape and dtype: `none` if a check fails
 ├── Lax/<Name>.lean # One file per lax primitive: differentiation rules and proofs
 │                   # (the six comparisons share Lax/Compare.lean)
 └── Jaxpr/<Name>.lean # Jaxprs of several primitives, e.g. from upstream issues
@@ -19,7 +20,7 @@ bugs/<name>.json    # One record per JAX bug, with its reproducer
 bugs/CLAUDE.md      # How to write a bug record
 scripts/audit.sh    # Forbidden-token scan, build, bug reproducers
 scripts/bugs.py     # Checks the bug records and runs their reproducers
-scripts/shapes.py   # Shape-level differential test of the model against JAX
+scripts/shapes.py   # Shape- and dtype-level differential test of the model against JAX
 gen/                # Generated Lean files of scripts/shapes.py (gitignored)
 pyproject.toml      # Pins the modelled JAX version
 ```
@@ -40,32 +41,42 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 
 ## Modelling rules
 
-- **Exact scalars.** An entry is a `Scalar`: a real number, `+∞`, `-∞` or NaN.
-  Special values follow IEEE 754. Finite values are exact: no rounding, no overflow, no signed zero, no integer dtypes for now.
-- **Shapes.** A shape `(m, n)` is `![m, n] : Shape 2`, and an array of shape `s` is a `Tensor (Index s)`.
+- **Exact scalars.** An entry of a float array of width `w` is a `Scalar w`: a real number, `+∞`, `-∞` or NaN.
+  Special values follow IEEE 754. Finite values are exact: no rounding, no overflow, no signed zero.
+  An integer entry is an exact `ℤ`. Unsigned integers and `jax_enable_x64` are not modelled.
+- **Shapes.** A shape `(m, n)` is `![m, n] : Shape 2`, and an array of dtype `d` and shape `s` is a `Tensor d (Index s)`.
   Shape checks that JAX does at trace time are proof arguments of the primitive.
-- **Checks of rules.** A shape check inside a rule that does not follow from the checks of the primitive
+- **Dtypes.** A dtype (`Jax/DType.lean`) is `bool`, `int` or `float` of a width, or `float0`.
+  Arguments that a primitive requires to have the same dtype share the dtype in its type,
+  and dtypes that it does not accept are not representable.
+  A constant in a rule has the dtype that JAX gives it, e.g. a Python float is `float32`.
+  An equality of dtypes that a rule needs is a proof argument of the rule, as for shapes.
+  The entries of a float array, `Scalar w`, carry the width, so Lean rejects an argument of another width.
+  Weak types are dropped: they never change a dtype or whether a `lax` primitive raises.
+- **Checks of rules.** A shape or dtype check inside a rule that does not follow from the checks of the primitive
   is a proof argument of the rule: the rule raises where it is false.
   A theorem `foo_not_defined` shows that it does not follow.
 - **Linear inputs.** A transpose rule that handles several linear inputs takes every argument as an `Option`,
   where `none` is an `ad.UndefinedPrimal`, and returns `none` if it raises (`IsPartialTranspose₂Of`).
 - **Branching on shapes.** A rule that branches on the shapes of its arguments, such as a batching rule,
-  is a function of `Arr`, an array of any shape, and returns `none` if it raises (`IsBatchOf₁`, `IsBatchOf₃`).
+  is a function of `Arr`, an array of any shape and dtype, and returns `none` if it raises (`IsBatchOf₁`, `IsBatchOf₃`).
   It calls the primitives of `Lax/Dynamic.lean`, which wrap those of `Lax/Primal.lean`.
-- **Booleans.** A boolean array of shape `s` is a function `Index s → Bool`, with no tangent.
-- **Indices.** An array of indices of shape `s`, as `gather` and `scatter` take it, is a function `Index s → ℤ`, with no tangent.
+- **Booleans.** A boolean array of shape `s` is a `Tensor .bool (Index s)`, whose tangent dtype is `float0`.
+- **Indices.** An array of indices of shape `s`, as `gather` and `scatter` take it, is a `Tensor (.int wi) (Index s)`,
+  whose tangent dtype is `float0`.
   `scripts/shapes.py` also compares the positions that `gather` and `scatter_add` read and write with JAX on concrete indices.
-- **Computed shapes.** A rule has the output shape that its own code computes, even if it only equals the expected shape propositionally.
-  Correctness notions compare arrays with `Tensor.Same`, so a rule that returns the wrong shape is refutable.
+- **Computed shapes.** A rule has the output shape and dtype that its own code computes, even if it only equals the expected one propositionally.
+  Correctness notions compare arrays with `Tensor.Same`, so a rule that returns the wrong shape or dtype is refutable.
 - **Jaxpr level.** Model `lax` primitives and jaxprs, not Python or `jax.numpy`.
 - **Mirror the source.** Differentiation rules (`ad.defjvp`, `ad.deflinear`, transpose rules)
   are transcribed from the JAX source as written, including argument order, not from the textbook.
   If JAX's rule is wrong, the model must be wrong in the same way.
 - **Cite the source.** Every mirrored definition cites `jax/_src/<file>.py:<line>` of the pinned version
   and quotes the rule if it is short.
-- **Shapes are tested.** `scripts/shapes.py` traces every modelled function and rule in JAX
-  and checks with `decide` that the shapes in the model's types agree,
+- **Shapes and dtypes are tested.** `scripts/shapes.py` traces every modelled function and rule in JAX
+  and checks with `decide` that the shapes and dtypes in the model's types agree,
   and that JAX rejects an input exactly when a proof argument is false.
+  It checks with `#check` and `#check_failure` that JAX rejects arguments of different dtypes exactly when Lean does.
   A new primitive or rule gets cases there. Model definitions must reduce by `decide` on concrete shapes.
 - **Primal semantics** are not defined in Python but by XLA.
   Take them from the `lax` docstring and the [StableHLO spec](https://github.com/openxla/stablehlo/blob/main/docs/spec.md).

@@ -15,7 +15,7 @@ It is correct also for strides other than 1 (`sliceTranspose_correct`).
 
 namespace Jax.Lax
 
-variable {n : ℕ} {s : Shape n}
+variable {n : ℕ} {s : Shape n} {w : FloatWidth}
 
 /-- The JVP rule of `slice`, which applies the primitive to the tangent.
 `jax/_src/lax/slicing.py:1419`:
@@ -33,8 +33,8 @@ def _slice_jvp_rule(primals, tangents, *, start_indices, limit_indices, strides)
 ``` -/
 def sliceJvp (startIndices limitIndices strides : Fin n → ℕ) (hl : ∀ d, limitIndices d ≤ s d)
     (hs : ∀ d, startIndices d ≤ limitIndices d) (hst : ∀ d, 0 < strides d)
-    (operandDot _operand : Tensor (Index s)) :
-    Tensor (Index (sliceShape startIndices limitIndices strides)) :=
+    (operandDot _operand : Tensor (.float w) (Index s)) :
+    Tensor (.float w) (Index (sliceShape startIndices limitIndices strides)) :=
   slice startIndices limitIndices strides hl hs hst operandDot
 
 /-- `real_limits` of the transpose rule of `slice`: one more than the last position that the slice reads,
@@ -101,8 +101,8 @@ def _slice_transpose_fancy(out_ct, operand, *, start_indices, limit_indices, str
 ``` -/
 noncomputable def sliceTranspose (s : Shape n) (startIndices limitIndices strides : Fin n → ℕ)
     (hst : ∀ d, 0 < strides d)
-    (outCt : Tensor (Index (sliceShape startIndices limitIndices strides))) :
-    Tensor (Index (padShape (sliceShape startIndices limitIndices strides)
+    (outCt : Tensor (.float w) (Index (sliceShape startIndices limitIndices strides))) :
+    Tensor (.float w) (Index (padShape (sliceShape startIndices limitIndices strides)
       (fun d => (startIndices d : ℤ))
       (fun d => (s d : ℤ) - sliceRealLimits startIndices limitIndices strides d)
       (fun d => strides d - 1))) :=
@@ -135,7 +135,7 @@ private def sliceReal (startIndices limitIndices strides : Fin n → ℕ)
 private theorem slice_ofReal (startIndices limitIndices strides : Fin n → ℕ)
     (hl : ∀ d, limitIndices d ≤ s d) (hs : ∀ d, startIndices d ≤ limitIndices d)
     (hst : ∀ d, 0 < strides d) (x : Index s → ℝ) :
-    slice startIndices limitIndices strides hl hs hst (ofReal x) =
+    slice (d := .float w) startIndices limitIndices strides hl hs hst (ofReal x) =
       ofReal (sliceReal startIndices limitIndices strides hl hst x) :=
   rfl
 
@@ -144,8 +144,8 @@ and zero elsewhere. -/
 private theorem sliceTranspose_same (startIndices limitIndices strides : Fin n → ℕ)
     (hl : ∀ d, limitIndices d ≤ s d) (hst : ∀ d, 0 < strides d)
     (ct : Index (sliceShape startIndices limitIndices strides) → ℝ) :
-    (sliceTranspose s startIndices limitIndices strides hst (ofReal ct)).Same
-      (ofReal (Function.extend (source startIndices limitIndices strides hl hst) ct 0)) := by
+    (sliceTranspose (w := w) s startIndices limitIndices strides hst (ofReal ct)).Same
+      (ofReal (w := w) (Function.extend (source startIndices limitIndices strides hl hst) ct 0)) := by
   refine Tensor.same_of_shape_eq (fun d => ?_) fun i' i hii => ?_
   · simp only [padShape, slice_pad_eq s startIndices limitIndices strides hst d, Int.toNat_natCast]
   · have hiff : ∀ j : Index (sliceShape startIndices limitIndices strides),
@@ -177,7 +177,7 @@ theorem sliceJvp_correct (startIndices limitIndices strides : Fin n → ℕ)
     (hl : ∀ d, limitIndices d ≤ s d) (hs : ∀ d, startIndices d ≤ limitIndices d)
     (hst : ∀ d, 0 < strides d) :
     IsJvpOf (sliceJvp startIndices limitIndices strides hl hs hst)
-      (slice startIndices limitIndices strides hl hs hst) :=
+      (slice (d := .float w) startIndices limitIndices strides hl hs hst) :=
   isJvpOf_of_linear (sliceReal startIndices limitIndices strides hl hst)
     (slice_ofReal startIndices limitIndices strides hl hs hst)
 
@@ -186,7 +186,7 @@ theorem sliceTranspose_correct (startIndices limitIndices strides : Fin n → �
     (hl : ∀ d, limitIndices d ≤ s d) (hs : ∀ d, startIndices d ≤ limitIndices d)
     (hst : ∀ d, 0 < strides d) :
     IsTransposeOf (sliceTranspose s startIndices limitIndices strides hst)
-      (slice startIndices limitIndices strides hl hs hst) := by
+      (slice (d := .float w) startIndices limitIndices strides hl hs hst) := by
   intro ct x
   refine ⟨_, _, slice_ofReal startIndices limitIndices strides hl hs hst x,
     sliceTranspose_same startIndices limitIndices strides hl hst ct, ?_⟩
