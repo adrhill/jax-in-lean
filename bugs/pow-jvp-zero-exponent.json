@@ -3,31 +3,19 @@
   "title": "The derivative of `pow(x, 0)` with respect to `x` is NaN at `x = 0`",
   "status": "proven",
   "primitive": "pow",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:5352",
   "lean_refutation": "Jax.Lax.powJvpLeft_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/20574",
-  "summary": [
-    "`lax.pow(x, y)` follows IEEE 754, so `pow(x, 0) = 1` for every `x`, including `x = 0`.",
-    "The function `x ↦ pow(x, 0)` is constant with derivative 0,",
-    "but forward and reverse mode return NaN at `x = 0`.",
+  "description": [
+    "Forward and reverse mode return NaN for the derivative of `lax.pow(x, 0)` with respect to `x` at `x = 0`.",
     "In turn, the second derivative of `x ↦ x ** 1` at 0 is NaN,",
     "for a floating-point and an integer exponent alike.",
-    "This is the NaN Hessian of the upstream issue, which is still present."
+    "This is the NaN Hessian of the upstream issue, which is still present.",
+    "The primal and other `x` are correct."
   ],
-  "cause": [
-    "For a floating-point exponent, `_pow_jvp_lhs` computes `jac = mul(y, pow(x, sub(y, _ones(y))))`.",
-    "At `x = 0` and `y = 0` this is `0 * pow(0, -1) = 0 * ∞ = NaN`.",
-    "The branch for an integer exponent guards against `y = 0` with a `select`,",
-    "but first converts `y` to a floating-point dtype (`jax/_src/lax/lax.py:5342`),",
-    "so the inner `pow(x, y - 1)` has a floating-point exponent, and its derivative takes the unguarded branch."
-  ],
-  "fix": null,
-  "lean": [
-    "`Jax.Lax.powJvp_correct` proves the rules of `pow` correct where the base is positive.",
-    "`Jax.Lax.powJvpLeft_correct` proves the rule for the base correct for a constant exponent",
-    "wherever `x ↦ pow(x, y)` is finite and differentiable, except at `x = 0` and `y = 0`.",
-    "The model has no integer dtypes, so it covers only the floating-point branch."
+  "expected": [
+    "`lax.pow(x, y)` follows IEEE 754, so `pow(x, 0) = 1` for every `x`, including `x = 0`.",
+    "The function `x ↦ pow(x, 0)` is constant, so its derivative is 0 everywhere."
   ],
   "reproducer": [
     "import jax",
@@ -67,5 +55,20 @@
     "print(jax.jacfwd(jax.jacfwd(p))(zero))",
     "# desired: [[[0.]]]",
     "# actual:  [[[nan]]]"
-  ]
+  ],
+  "cause": [
+    "For a floating-point exponent, `_pow_jvp_lhs` computes `jac = mul(y, pow(x, sub(y, _ones(y))))`.",
+    "At `x = 0` and `y = 0` this is `0 * pow(0, -1) = 0 * ∞ = NaN`.",
+    "The branch for an integer exponent guards against `y = 0` with a `select`,",
+    "but first converts `y` to a floating-point dtype (`jax/_src/lax/lax.py:5342`),",
+    "so the inner `pow(x, y - 1)` has a floating-point exponent, and its derivative takes the unguarded branch."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.powJvp_correct` proves the rules of `pow` correct where the base is positive.",
+    "`Jax.Lax.powJvpLeft_correct` proves the rule for the base correct for a constant exponent",
+    "wherever `x ↦ pow(x, y)` is finite and differentiable, except at `x = 0` and `y = 0`.",
+    "The model has no integer dtypes, so it covers only the floating-point branch."
+  ],
+  "jax_version": "0.12.0.1"
 }

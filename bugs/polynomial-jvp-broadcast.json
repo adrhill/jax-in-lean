@@ -3,28 +3,21 @@
   "title": "The JVP of `polynomial` has the wrong shape if the constant coefficient broadcasts `x`",
   "status": "proven",
   "primitive": "polynomial",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:5265",
   "lean_refutation": "Jax.Lax.polynomialJvp_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/42480",
-  "summary": [
-    "`lax.polynomial(x, coeffs)` broadcasts `x` and all coefficients against each other.",
-    "If only the constant coefficient `a_0` is larger than `x` along some axis, the primal is correct,",
-    "but the tangent with respect to `x` has the shape of `x` instead of the shape of the result.",
+  "description": [
+    "If only the constant coefficient `a_0` of `lax.polynomial(x, coeffs)` is larger than `x` along some axis,",
+    "the tangent with respect to `x` has the shape of `x` instead of the shape of the result.",
     "So forward mode returns a tangent of the wrong shape, reverse mode raises a `ValueError`,",
-    "and `grad` of a sum silently returns a wrong value."
+    "and `grad` of a sum silently returns a wrong value.",
+    "The primal is correct."
   ],
-  "cause": [
-    "`_polynomial_jvp` computes the tangent as `mul(dot_x, dy_dx)`,",
-    "where `dy_dx = polynomial(x, deriv_coeffs)` broadcasts only `x` and the coefficients of positive degree.",
-    "`a_0` drops out of the derivative and takes its shape with it,",
-    "and the tangent is never broadcast to the shape of the result."
-  ],
-  "fix": null,
-  "lean": [
-    "`Jax.Lax.polynomialJvp_correct` proves the rule correct if `a_0` broadcasts to the shape of `x` and the other coefficients.",
-    "The model has no rank-0 arrays, so `Jax.Lax.polynomialJvp_not_correct` uses a linear coefficient of shape `(1,)`.",
-    "JAX behaves the same for the scalar coefficient `2.0` of the upstream issue."
+  "expected": [
+    "`lax.polynomial` broadcasts `x` and all coefficients against each other,",
+    "so the tangent should have the shape of the result, as the primal does.",
+    "For `x` of shape `(1,)` and `a_0` of shape `(3,)`, each of the three entries of `a_0 + 2 x` has slope 2 in `x`,",
+    "so the gradient of their sum is 6."
   ],
   "reproducer": [
     "import jax",
@@ -73,5 +66,18 @@
     "print(jax.grad(lambda x: g(x).sum())(x))",
     "# desired: [6.]",
     "# actual:  [2.]"
-  ]
+  ],
+  "cause": [
+    "`_polynomial_jvp` computes the tangent as `mul(dot_x, dy_dx)`,",
+    "where `dy_dx = polynomial(x, deriv_coeffs)` broadcasts only `x` and the coefficients of positive degree.",
+    "`a_0` drops out of the derivative and takes its shape with it,",
+    "and the tangent is never broadcast to the shape of the result."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.polynomialJvp_correct` proves the rule correct if `a_0` broadcasts to the shape of `x` and the other coefficients.",
+    "The model has no rank-0 arrays, so `Jax.Lax.polynomialJvp_not_correct` uses a linear coefficient of shape `(1,)`.",
+    "JAX behaves the same for the scalar coefficient `2.0` of the upstream issue."
+  ],
+  "jax_version": "0.12.0.1"
 }

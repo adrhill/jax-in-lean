@@ -23,7 +23,7 @@ STATUSES = SCHEMA["properties"]["status"]["enum"]
 OUTPUT = re.compile(r"\s*# (output|desired|actual):\s+")
 # Text that refers to Lean or to this repository, which only the field `lean` may contain.
 INTERNAL = re.compile(r"\bLean\b|\bJax\.|\.lean\b|\bbugs/|\bscripts/|\b[Mm]odel(?:led|s)?\b")
-STANDALONE = ("title", "summary", "cause", "fix", "reproducer")
+STANDALONE = ("title", "description", "expected", "reproducer", "cause", "fix")
 
 
 def check(bug: dict) -> list[str]:
@@ -32,7 +32,9 @@ def check(bug: dict) -> list[str]:
     errors += [f"unknown key {key!r}" for key in bug if key not in SCHEMA["properties"]]
     if errors:
         return errors
-    for key in ("summary", "cause", "lean", "reproducer"):
+    if list(bug) != [key for key in SCHEMA["properties"] if key in bug]:
+        errors.append(f"keys must follow the order of the schema: {list(SCHEMA['properties'])}")
+    for key in ("description", "expected", "reproducer", "cause", "lean"):
         if not bug[key]:
             errors.append(f"{key} must not be empty")
     if bug["fix"] == []:

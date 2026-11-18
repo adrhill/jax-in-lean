@@ -3,14 +3,12 @@
   "title": "A scatter with empty index vectors is silently computed elementwise if the updates have the shape of the operand",
   "status": "found",
   "primitive": "scatter_add",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/slicing.py:3437",
   "lean_refutation": null,
   "upstream_issue": null,
-  "summary": [
-    "If `scatter_dims_to_operand_dims` is empty, the index vectors are empty, and every update goes to the window at position 0.",
-    "So `lax.scatter_add` with indices of shape `(4, 0)` adds four updates to the same window.",
-    "If the updates happen to have the shape of the operand, JAX instead returns `operand + updates`, without an error.",
+  "description": [
+    "If `scatter_dims_to_operand_dims` is empty and the updates have the shape of the operand,",
+    "`lax.scatter_add` silently returns `operand + updates`.",
     "With any other number of updates the result is right.",
     "`lax.scatter` and the other scatter primitives are affected in the same way.",
     "",
@@ -19,24 +17,11 @@
     "if the result has the shape of the operand, while forward mode is right.",
     "`jnp` indexing is not known to emit such a gather or scatter."
   ],
-  "cause": [
-    "In XLA. `_scatter_lower` emits the scatter as it is, and it is valid StableHLO.",
-    "The algebraic simplifier of XLA (`algsimp`) then replaces it with the update computation applied elementwise,",
-    "as if update `k` went to position `k`.",
-    "On an operand of rank 0, the same scatter fails to compile instead."
-  ],
-  "fix": [
-    "In XLA. Until then, JAX can combine the updates over the scatter axes before it lowers,",
-    "so that one update remains: `scatter_add` sums them, and `scatter_mul`, `scatter_min` and `scatter_max` use their own operation."
-  ],
-  "lean": [
-    "The model follows StableHLO: `Jax.Lax.scatterAdd` adds every update to the window at position 0.",
-    "`Jax.Lax.gatherTranspose_correct` proves the transpose rule of `gather` correct for these arguments,",
-    "so the rule is right and the compiled scatter is wrong.",
-    "`scripts/shapes.py` skips this case when it compares the positions that the model and JAX write to."
-  ],
-  "related": [
-    "scatter-scalar-operand-compile"
+  "expected": [
+    "In StableHLO, an empty `scatter_dims_to_operand_dims` makes the index vectors empty,",
+    "and every update goes to the window at position 0.",
+    "So `lax.scatter_add` with indices of shape `(4, 0)` should add all four updates to the same window,",
+    "as it adds three updates for indices of shape `(3, 0)`."
   ],
   "reproducer": [
     "import jax",
@@ -72,5 +57,25 @@
     "print(jax.grad(f)(x))",
     "# desired: [15.  0.  0.  0.]",
     "# actual:  [1. 2. 4. 8.]"
-  ]
+  ],
+  "cause": [
+    "In XLA. `_scatter_lower` emits the scatter as it is, and it is valid StableHLO.",
+    "The algebraic simplifier of XLA (`algsimp`) then replaces it with the update computation applied elementwise,",
+    "as if update `k` went to position `k`.",
+    "On an operand of rank 0, the same scatter fails to compile instead."
+  ],
+  "fix": [
+    "In XLA. Until then, JAX can combine the updates over the scatter axes before it lowers,",
+    "so that one update remains: `scatter_add` sums them, and `scatter_mul`, `scatter_min` and `scatter_max` use their own operation."
+  ],
+  "lean": [
+    "The model follows StableHLO: `Jax.Lax.scatterAdd` adds every update to the window at position 0.",
+    "`Jax.Lax.gatherTranspose_correct` proves the transpose rule of `gather` correct for these arguments,",
+    "so the rule is right and the compiled scatter is wrong.",
+    "`scripts/shapes.py` skips this case when it compares the positions that the model and JAX write to."
+  ],
+  "related": [
+    "scatter-scalar-operand-compile"
+  ],
+  "jax_version": "0.12.0.1"
 }

@@ -3,61 +3,29 @@
   "title": "`polynomial` at `x = ±inf` silently returns `inf` or NaN depending on `unroll`",
   "status": "proven",
   "primitive": "polynomial",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:5312",
   "lean_refutation": "Jax.Lax.polynomial_unroll_not_independent",
   "upstream_issue": null,
-  "summary": [
-    "`lax.polynomial(x, coeffs, unroll=None)` evaluates `a_0 + x (a_1 + … + x a_N)` by Horner's rule.",
-    "Its docstring describes `unroll` as the number of terms to unroll before falling back to `lax.scan`,",
-    "and `jnp.polyval`, which calls it, states that `unroll` \"does not affect correctness\".",
-    "",
-    "At `x = ±inf` the result depends on `unroll`.",
+  "description": [
+    "At `x = ±inf` the result of `lax.polynomial` depends on `unroll`.",
     "With at most `unroll` coefficients (8 by default) it is the infinity that Horner's rule gives,",
     "and with more it is NaN.",
     "So `1 + x + x**2` at `inf` is `inf` by default and NaN with `unroll=1`,",
     "and with the default `unroll` every polynomial of nine or more coefficients is NaN at `inf`, even if all coefficients are positive.",
     "The JVP has the same dependence, since it evaluates the derivative with the same `unroll`.",
     "Finite `x` are not affected.",
+    "`jnp.polyval` reaches the bug."
+  ],
+  "expected": [
+    "The docstring of `lax.polynomial` describes `unroll` as the number of terms to unroll before falling back to `lax.scan`,",
+    "and `jnp.polyval`, which calls it, states that `unroll` \"does not affect correctness\".",
+    "So the result should not depend on `unroll`.",
     "",
-    "Both results can be argued for.",
-    "Horner's rule as the docstring writes it, starting from `a_N`, gives `inf`, which is also the limit of the polynomial.",
-    "Horner's rule starting from `0`, as NumPy's `polyval` does, gives NaN:",
-    "NumPy returns NaN at `inf` for every number of coefficients.",
-    "Either way, `unroll` should not choose between them.",
-    "`jnp.polyval` reaches the bug, and agrees with NumPy only above the threshold."
-  ],
-  "cause": [
-    "`_polynomial_lower` starts the unrolled loop from the last coefficient, but the `scan` from zero:",
-    "```python",
-    "def _polynomial_lower(x, *coeffs, unroll=None):",
-    "  unroll_threshold = 8 if unroll is None else unroll",
-    "  if len(coeffs) <= unroll_threshold:",
-    "    acc = coeffs[-1]",
-    "    for c in reversed(coeffs[:-1]):",
-    "      acc = add(mul(acc, x), c)",
-    "    return acc",
-    "  ...",
-    "  y, _ = control_flow.scan(",
-    "      lambda acc, c: (add(mul(acc, x), c), None),",
-    "      full_like(x, 0, shape=out_shape, sharding=out_sharding),",
-    "      stack(b_coeffs, axis=0),",
-    "      unroll=unroll_threshold,",
-    "  )",
-    "```",
-    "The first step of the `scan` computes `0 * x + a_N`.",
-    "That is `a_N` for finite `x`, but NaN for `x = ±inf`, and the NaN propagates through every later step."
-  ],
-  "fix": [
-    "Make the two paths start from the same value.",
-    "To keep the docstring's Horner's rule, start the `scan` from `a_N`, broadcast to `out_shape`, and scan over `b_coeffs[1:]`.",
-    "To match NumPy, start the unrolled loop from `0` instead, at the cost of one more multiplication."
-  ],
-  "lean": [
-    "`Jax.Lax.polynomial` takes `unroll` and models both paths of `_polynomial_lower`, and `polynomialJvp_correct` holds for every `unroll`.",
-    "`Jax.Lax.polynomial_posInf_of_lt` shows that with more coefficients than the threshold the result at `x = ∞` is NaN for all coefficients,",
-    "and `Jax.Lax.polynomial_posInf_of_le` that with at most the threshold it is `∞` if all coefficients are `1`.",
-    "`Jax.Lax.polynomial_unroll_not_independent` refutes that `unroll` does not change the result."
+    "Either `inf` or NaN can be argued for, as long as every `unroll` gives the same.",
+    "Horner's rule as the docstring writes it, `a_0 + x (a_1 + … + x a_N)`, starts from `a_N` and gives `inf`,",
+    "which is also the limit of the polynomial.",
+    "Horner's rule starting from `0`, as NumPy's `polyval` does, gives NaN.",
+    "NumPy returns NaN at `inf` for every number of coefficients, and `jnp.polyval` agrees with it only above the threshold."
   ],
   "reproducer": [
     "import jax",
@@ -95,5 +63,38 @@
     "with np.errstate(invalid=\"ignore\"):",
     "    print(np.polyval(np.ones(3), np.inf), np.polyval(np.ones(9), np.inf))",
     "# output: nan nan"
-  ]
+  ],
+  "cause": [
+    "`_polynomial_lower` starts the unrolled loop from the last coefficient, but the `scan` from zero:",
+    "```python",
+    "def _polynomial_lower(x, *coeffs, unroll=None):",
+    "  unroll_threshold = 8 if unroll is None else unroll",
+    "  if len(coeffs) <= unroll_threshold:",
+    "    acc = coeffs[-1]",
+    "    for c in reversed(coeffs[:-1]):",
+    "      acc = add(mul(acc, x), c)",
+    "    return acc",
+    "  ...",
+    "  y, _ = control_flow.scan(",
+    "      lambda acc, c: (add(mul(acc, x), c), None),",
+    "      full_like(x, 0, shape=out_shape, sharding=out_sharding),",
+    "      stack(b_coeffs, axis=0),",
+    "      unroll=unroll_threshold,",
+    "  )",
+    "```",
+    "The first step of the `scan` computes `0 * x + a_N`.",
+    "That is `a_N` for finite `x`, but NaN for `x = ±inf`, and the NaN propagates through every later step."
+  ],
+  "fix": [
+    "Make the two paths start from the same value.",
+    "To keep the docstring's Horner's rule, start the `scan` from `a_N`, broadcast to `out_shape`, and scan over `b_coeffs[1:]`.",
+    "To match NumPy, start the unrolled loop from `0` instead, at the cost of one more multiplication."
+  ],
+  "lean": [
+    "`Jax.Lax.polynomial` takes `unroll` and models both paths of `_polynomial_lower`, and `polynomialJvp_correct` holds for every `unroll`.",
+    "`Jax.Lax.polynomial_posInf_of_lt` shows that with more coefficients than the threshold the result at `x = ∞` is NaN for all coefficients,",
+    "and `Jax.Lax.polynomial_posInf_of_le` that with at most the threshold it is `∞` if all coefficients are `1`.",
+    "`Jax.Lax.polynomial_unroll_not_independent` refutes that `unroll` does not change the result."
+  ],
+  "jax_version": "0.12.0.1"
 }

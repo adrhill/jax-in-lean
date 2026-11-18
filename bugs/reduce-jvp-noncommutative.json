@@ -3,31 +3,24 @@
   "title": "The JVP of `reduce` reorders the entries, so it is wrong for a non-commutative monoid",
   "status": "proven",
   "primitive": "reduce",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:9122",
   "lean_refutation": "Jax.Lax.reduceJvp_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/32474",
-  "summary": [
-    "The `lax.reduce` docstring only requires `computation` and `init_values` to form a monoid, which need not be commutative,",
-    "and StableHLO `reduce` combines the entries in order.",
-    "For an associative computation that is not commutative,",
-    "the JVP rule of `reduce` returns a wrong primal and a wrong tangent.",
+  "description": [
+    "For an associative `computation` that is not commutative,",
+    "the JVP rule of `lax.reduce` returns a wrong primal and a wrong tangent.",
+    "So `jax.jvp`, `jax.grad` and `jax.value_and_grad` are wrong, while `lax.reduce` itself is right.",
     "",
     "**Example.** `(x, y) ↦ select(y == 1, x, y)` keeps the last argument other than 1.",
     "It is associative with identity 1, and smooth wherever its second argument is not 1.",
-    "On `[2, 3, 4]` the reduction returns 4, and near this point it is the last entry, with derivative `e_2`.",
-    "The JVP rule instead reduces `[op(2, 4), op(3, 1)] = [4, 3]` to 3 and returns the tangent of the middle entry."
+    "On `[2, 3, 4]` the JVP rule reduces `[op(2, 4), op(3, 1)] = [4, 3]` to 3",
+    "and returns the tangent of the middle entry."
   ],
-  "cause": [
-    "`_reduce_jvp` differentiates `_reduce_tree` instead, which combines entry `i` of the first half with entry `i` of the second half.",
-    "This order differs from that of StableHLO, which changes the result of a computation that is not commutative.",
-    "With several `dimensions`, the rule also flattens them in the order of the `dimensions` tuple",
-    "instead of the lexicographic order of StableHLO."
-  ],
-  "fix": null,
-  "lean": [
-    "`Jax.Lax.lastNotOne_assoc`, `lastNotOne_one_left` and `lastNotOne_one_right` show that this computation is a monoid,",
-    "and `lastNotOne_jvp_correct` that its JVP is correct where every entry differs from 1."
+  "expected": [
+    "The `lax.reduce` docstring only requires `computation` and `init_values` to form a monoid, which need not be commutative,",
+    "and StableHLO `reduce` combines the entries in order.",
+    "In the example, the reduction of `[2, 3, 4]` is 4, as the primal computes.",
+    "Near this point it is the last entry, so its derivative is the last unit vector `[0, 0, 1]`."
   ],
   "reproducer": [
     "import jax",
@@ -67,5 +60,17 @@
     "print(jax.value_and_grad(g)(x)[0])",
     "# desired: 0.16666667",
     "# actual:  1.5"
-  ]
+  ],
+  "cause": [
+    "`_reduce_jvp` differentiates `_reduce_tree` instead, which combines entry `i` of the first half with entry `i` of the second half.",
+    "This order differs from that of StableHLO, which changes the result of a computation that is not commutative.",
+    "With several `dimensions`, the rule also flattens them in the order of the `dimensions` tuple",
+    "instead of the lexicographic order of StableHLO."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.lastNotOne_assoc`, `lastNotOne_one_left` and `lastNotOne_one_right` show that this computation is a monoid,",
+    "and `lastNotOne_jvp_correct` that its JVP is correct where every entry differs from 1."
+  ],
+  "jax_version": "0.12.0.1"
 }

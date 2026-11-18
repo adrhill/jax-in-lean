@@ -371,16 +371,19 @@ function reproducer(bug) {
       : `<div class="out bug">${row("desired", part.desired)}${row("actual", part.actual)}</div>`;
   }).join("");
 }
-// The sections of a bug record, each but the summary led by its name in bold.
-function description(bug) {
+// The sections of a bug record, in the order of the upstream issue, then those of the dashboard alone.
+function sections(bug) {
+  const text = (lines) => `<div class="desc">${md(lines.join("\n"))}</div>`;
   const related = (bug.related || []).map((name) => `[\`${name}\`](#${name})`);
   return [
-    bug.summary.join("\n"),
-    bug.cause && `**Cause.** ${bug.cause.join("\n")}`,
-    bug.fix && `**Fix.** ${bug.fix.join("\n")}`,
-    bug.lean && `**Lean.** ${bug.lean.join("\n")}`,
-    related.length && `**See also.** ${related.join(", ")}.`,
-  ].filter(Boolean).map(md).join("");
+    ["Description", text(bug.description)],
+    ["Expected behavior", text(bug.expected)],
+    ["Reproducer", `<div class="repro"><button class="copy" type="button" data-bug="${esc(bug.name)}">Copy</button>${reproducer(bug)}</div>`],
+    ["Cause", text(bug.cause)],
+    bug.fix && ["Suggested fix", text(bug.fix)],
+    ["Lean", text(bug.lean)],
+    related.length && ["See also", text([`${related.join(", ")}.`])],
+  ].filter(Boolean).map(([heading, body]) => `<h3>${heading}</h3>${body}`).join("");
 }
 function render(bug) {
   const none = `<span class="none">–</span>`;
@@ -397,12 +400,7 @@ function render(bug) {
       <div class="title">${mdInline(bug.title)}</div>
       <dl class="facts">${facts.map(([k, val]) => `<div${k === "Lean refutation" ? ' class="wide"' : ""}><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>
     </summary>
-    <div class="gh">
-      <h3>Description</h3>
-      <div class="desc">${description(bug)}</div>
-      <h3>Reproducer</h3>
-      <div class="repro"><button class="copy" type="button" data-bug="${esc(bug.name)}">Copy</button>${reproducer(bug)}</div>
-    </div>
+    <div class="gh">${sections(bug)}</div>
   </details>`;
 }
 
@@ -410,7 +408,7 @@ function matches(bug) {
   if (state.status && bug.status !== state.status) return false;
   if (state.prim && bug.primitive !== state.prim) return false;
   if (!state.q) return true;
-  const hay = [bug.name, bug.title, bug.primitive, bug.source, bug.lean_refutation || "", ...bug.summary, ...bug.cause, ...(bug.fix || []), ...bug.lean].join(" ").toLowerCase();
+  const hay = [bug.name, bug.title, bug.primitive, bug.source, bug.lean_refutation || "", ...bug.description, ...bug.expected, ...bug.cause, ...(bug.fix || []), ...bug.lean].join(" ").toLowerCase();
   return state.q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
 }
 

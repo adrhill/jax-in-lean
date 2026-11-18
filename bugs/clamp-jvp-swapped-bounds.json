@@ -3,30 +3,22 @@
   "title": "`clamp` has zero derivative with respect to `max` where `x <= max < min`, although its result is `max`",
   "status": "proven",
   "primitive": "clamp",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:7781",
   "lean_refutation": "Jax.Lax.clampJvp_not_correct",
   "upstream_issue": null,
-  "summary": [
-    "`lax.clamp(min, x, max)` lowers to StableHLO `clamp`, which computes `minimum(maximum(x, min), max)`.",
-    "So where `min > max`, the result is `max` for every `x`,",
-    "and near a point with `x < max < min` the function is just `max`, with derivative 1 with respect to `max`.",
-    "Forward and reverse mode return 0 instead.",
-    "`jnp.clip`, which is built from `maximum` and `minimum`, gets the derivative right.",
+  "description": [
+    "Where `x <= max < min`, `lax.clamp(min, x, max)` returns `max`,",
+    "but forward and reverse mode return 0 for its derivative with respect to `max`.",
+    "Bounds with `min < max` are not affected.",
+    "`jnp.clip`, which is built from `maximum` and `minimum`, gets the derivative right."
+  ],
+  "expected": [
+    "`lax.clamp` lowers to StableHLO `clamp`, which computes `minimum(maximum(x, min), max)`.",
+    "So near a point with `x < max < min` the function is just `max`,",
+    "with derivative 1 with respect to `max` and 0 with respect to `x` and `min`.",
     "",
-    "The docstring of `lax.clamp` says the result is `min` where `x < min`, which disagrees with XLA where `min > max`."
-  ],
-  "cause": [
-    "The rule for `min` guards against `min > max` with `lt(min, max)`, so it correctly returns 0 there.",
-    "The rule for `max`, `select(lt(max, operand), g, _zeros(operand))`, has no such guard:",
-    "it returns the tangent of `max` only where `max < x`.",
-    "So where `x < max < min`, every rule returns 0."
-  ],
-  "fix": null,
-  "lean": [
-    "`Jax.Lax.clampJvp_correct` proves the three rules correct where every entry has",
-    "`x > max`, or `min < x < max`, or `x < min < max`.",
-    "At every other point where `clamp` is differentiable, some entry has `x <= max < min`, and the rules are wrong there."
+    "The docstring of `lax.clamp` says the result is `min` where `x < min`, which disagrees with XLA where `min > max`.",
+    "The primal follows XLA, so the derivative should too."
   ],
   "reproducer": [
     "import jax",
@@ -57,5 +49,18 @@
     "print(jax.grad(lax.clamp, argnums=2)(lo, hi, hi))",
     "# desired: 1.0",
     "# actual:  0.0"
-  ]
+  ],
+  "cause": [
+    "The rule for `min` guards against `min > max` with `lt(min, max)`, so it correctly returns 0 there.",
+    "The rule for `max`, `select(lt(max, operand), g, _zeros(operand))`, has no such guard:",
+    "it returns the tangent of `max` only where `max < x`.",
+    "So where `x < max < min`, every rule returns 0."
+  ],
+  "fix": null,
+  "lean": [
+    "`Jax.Lax.clampJvp_correct` proves the three rules correct where every entry has",
+    "`x > max`, or `min < x < max`, or `x < min < max`.",
+    "At every other point where `clamp` is differentiable, some entry has `x <= max < min`, and the rules are wrong there."
+  ],
+  "jax_version": "0.12.0.1"
 }

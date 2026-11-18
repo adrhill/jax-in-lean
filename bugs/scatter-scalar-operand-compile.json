@@ -3,38 +3,21 @@
   "title": "Scattering several updates into a scalar fails to compile, and so does `grad` of the matching `gather`",
   "status": "found",
   "primitive": "scatter_add",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/slicing.py:3437",
   "lean_refutation": null,
   "upstream_issue": null,
-  "summary": [
+  "description": [
+    "Scattering several updates into a scalar with `lax.scatter_add` fails to compile with an internal error of XLA,",
+    "and so does `jax.grad` of the matching `lax.gather`, whose transpose rule is that scatter.",
+    "`lax.scatter`, `lax.scatter_mul` and `lax.scatter_max` fail too.",
+    "The gather itself works, and so does a scatter of a single update,",
+    "which is what `x.at[()].add(u)` emits, with indices of shape `(0,)`."
+  ],
+  "expected": [
     "An operand of rank 0 has no axis to index, so its index vectors are empty.",
     "Indices of shape `(3, 0)` are three such index vectors:",
-    "`lax.gather` reads the scalar three times, and `lax.scatter_add` adds three updates to it.",
-    "The gather works, but the scatter fails to compile with an internal error of XLA,",
-    "and so does `jax.grad` of the gather, whose transpose rule is that scatter.",
-    "`lax.scatter`, `lax.scatter_mul` and `lax.scatter_max` fail too.",
-    "A single update works, and this is what `x.at[()].add(u)` emits, with indices of shape `(0,)`."
-  ],
-  "cause": [
-    "In XLA. `_scatter_lower` emits the scatter as it is, and it is valid StableHLO.",
-    "The pass `ScatterSimplifier` of XLA rewrites a scatter into a scalar to one call of the update computation,",
-    "as if there were a single update, and the call does not type-check with three updates.",
-    "On an operand of higher rank, the same scatter compiles but returns a wrong result:",
-    "the algebraic simplifier of XLA applies the update computation elementwise, as if update `k` went to position `k`."
-  ],
-  "fix": [
-    "In XLA. Until then, JAX can combine the updates over the scatter axes before it lowers,",
-    "so that one update remains: `scatter_add` sums them, and `scatter_mul`, `scatter_min` and `scatter_max` use their own operation."
-  ],
-  "lean": [
-    "The model computes the scatter: `Jax.Lax.scatterAdd` adds every update to the scalar.",
-    "`Jax.Lax.gatherTranspose_correct` proves the transpose rule of `gather` correct for these arguments,",
-    "so the rule is right and the compiler fails.",
-    "`scripts/shapes.py` found the failure when it compared the positions that the model and JAX write to."
-  ],
-  "related": [
-    "scatter-empty-index-vector-elementwise"
+    "`lax.gather` reads the scalar three times, and `lax.scatter_add` should add three updates to it.",
+    "So the gradient of the sum of the gathered values is 3, as forward mode computes."
   ],
   "reproducer": [
     "import jax",
@@ -74,5 +57,26 @@
     "# One update works.",
     "print(lax.scatter_add(x, indices[:1], jnp.ones(1, jnp.float32), scatter_dnums))",
     "# output: 6.0"
-  ]
+  ],
+  "cause": [
+    "In XLA. `_scatter_lower` emits the scatter as it is, and it is valid StableHLO.",
+    "The pass `ScatterSimplifier` of XLA rewrites a scatter into a scalar to one call of the update computation,",
+    "as if there were a single update, and the call does not type-check with three updates.",
+    "On an operand of higher rank, the same scatter compiles but returns a wrong result:",
+    "the algebraic simplifier of XLA applies the update computation elementwise, as if update `k` went to position `k`."
+  ],
+  "fix": [
+    "In XLA. Until then, JAX can combine the updates over the scatter axes before it lowers,",
+    "so that one update remains: `scatter_add` sums them, and `scatter_mul`, `scatter_min` and `scatter_max` use their own operation."
+  ],
+  "lean": [
+    "The model computes the scatter: `Jax.Lax.scatterAdd` adds every update to the scalar.",
+    "`Jax.Lax.gatherTranspose_correct` proves the transpose rule of `gather` correct for these arguments,",
+    "so the rule is right and the compiler fails.",
+    "`scripts/shapes.py` found the failure when it compared the positions that the model and JAX write to."
+  ],
+  "related": [
+    "scatter-empty-index-vector-elementwise"
+  ],
+  "jax_version": "0.12.0.1"
 }

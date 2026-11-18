@@ -7,16 +7,22 @@ should understand the bug, run the reproducer, and see where to fix it.
 
 ## From record to issue
 
-| Issue                 | Record                                                   |
-|-----------------------|----------------------------------------------------------|
-| Title                 | `title`                                                  |
-| Description           | `summary`                                                |
-| Reproducer and output | `reproducer`, with its `# desired:` and `# actual:` lines |
-| Cause                 | `cause`, with `source` as a link                         |
-| Suggested fix         | `fix`, if not `null`                                     |
-| JAX version           | `jax_version`                                            |
+The sections of the issue, in this order:
 
-`lean` and `lean_refutation` appear only on our dashboard, never in the issue.
+| Issue             | Record                                                    |
+|-------------------|-----------------------------------------------------------|
+| Title             | `title`                                                   |
+| Description       | `description`                                             |
+| Expected behavior | `expected`                                                |
+| Reproducer        | `reproducer`, with its `# desired:` and `# actual:` lines |
+| Cause             | `cause`, with `source` as a link                          |
+| Suggested fix     | `fix`, if not `null`                                      |
+| JAX version       | `jax_version`                                             |
+
+The keys of a record follow the order of the schema, which is that of the issue,
+with `lean` and `related` before `jax_version`. `scripts/bugs.py` checks this.
+
+`lean`, `lean_refutation` and `related` appear only on our dashboard, never in the issue.
 `lean` is the only field that may mention Lean, the model, theorems or files of this repository.
 `scripts/bugs.py` rejects such references in the other fields.
 To point to another bug, list it in `related` and describe what it does in the text.
@@ -27,13 +33,20 @@ Never write its file name.
 - **`title`**: one line that states the wrong behaviour and when it happens,
   e.g. "`vmap` of `clamp` raises if only `max` is batched and `min` and the operand are scalars".
   Say "silently" if the result is wrong without an error.
-- **`summary`**: what goes wrong, from the user's side, in a few sentences.
-  1. What the primitive promises, from its docstring or the StableHLO spec, if it is not obvious.
-  2. The input that triggers the bug, and what JAX does instead:
+- **`description`**: what goes wrong, from the user's side, in two to four sentences.
+  1. The input that triggers the bug, and what JAX does:
      a wrong result, a wrong shape, an exception, or a crash.
-  3. What still works (the primal, forward mode, nearby inputs),
+  2. What still works (the primal, forward mode, nearby inputs),
      and whether `jnp` code reaches the bug.
+  State the symptom, not the rule it breaks: that belongs in `expected`.
   Name no internal function here: that belongs in `cause`.
+- **`expected`**: what JAX should do instead, and on what authority,
+  in one to three sentences:
+  the docstring, the StableHLO spec, the mathematics,
+  or another path of JAX that already gets it right (the primal, forward mode, `jnp`, NumPy).
+  If more than one answer is defensible, name them and say what any fix must ensure.
+  The `# desired:` lines of the reproducer are instances of it.
+  It comes before the reproducer, so it names concrete inputs instead of the reproducer's variables.
 - **`cause`**: the faulty code in JAX or XLA and why it is wrong.
   Name the function, quote the few lines that matter in a fenced block if that is clearer than words,
   and cite other places as `jax/_src/<file>.py:<line>` of the pinned version.
@@ -64,6 +77,9 @@ Never write its file name.
 - Write code, shapes and names in backticks: `lax.clamp`, `(3, 2)`, `broadcast_dimensions`.
 - Semantic line breaks: one sentence or clause per array entry.
   An empty entry starts a new paragraph.
-- Read the record once as a stranger would, and cut anything they would skip.
+- Before adding a record, read the full report concatenated in the order of the issue:
+  title, description, expected behavior, reproducer, cause, fix and JAX version, then `lean`.
+  Read it as a stranger would, and cut anything they would skip.
+  Check that each section follows from the ones before it and does not repeat them.
 
 `broadcast-in-dim-forwarding.json` and `clamp-batch-scalar-operand.json` are good examples.

@@ -3,15 +3,46 @@
   "title": "Forward mode of `reduce_max` over an empty axis returns NaN, which reaches `jacfwd` of `jnp.max(..., initial=...)`",
   "status": "proven",
   "primitive": "reduce_max",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:9321",
   "lean_refutation": "Jax.Jaxpr.maxInitialJvp_not_correct",
   "upstream_issue": null,
-  "summary": [
-    "`jnp.max(x, axis=..., initial=c)` and `jnp.min` with `initial` accept a reduced axis of size 0.",
-    "The result is then the constant `c`, so its tangent is 0.",
-    "Forward mode returns NaN instead, and the NaN reaches the Jacobian of arrays that are not empty.",
+  "description": [
+    "Forward mode of `reduce_max` and `reduce_min` over an axis of size 0 returns NaN,",
+    "which `jnp.max` and `jnp.min` with `initial` reach.",
+    "Through `jacfwd`, the NaN reaches the Jacobian of arrays that are not empty.",
     "Reverse mode is right."
+  ],
+  "expected": [
+    "`jnp.max(x, axis=..., initial=c)` and `jnp.min` with `initial` accept a reduced axis of size 0.",
+    "The result is then the constant `c`, so its tangent should be 0."
+  ],
+  "reproducer": [
+    "import jax",
+    "import jax.numpy as jnp",
+    "",
+    "x = jnp.zeros((2, 0))",
+    "f = lambda x: jnp.max(x, axis=1, initial=0.0)",
+    "",
+    "# The maximum over an empty axis with initial=0 is the constant 0.",
+    "print(f(x))",
+    "# output: [0. 0.]",
+    "",
+    "# f is constant, so its tangent is 0.",
+    "print(jax.jvp(f, (x,), (x,))[1])",
+    "# desired: [0. 0.]",
+    "# actual:  [nan nan]",
+    "print(jax.jvp(lambda x: jnp.min(x, axis=1, initial=0.0), (x,), (x,))[1])",
+    "# desired: [0. 0.]",
+    "# actual:  [nan nan]",
+    "",
+    "# The NaN reaches the Jacobian of an array that is not empty.",
+    "y = jnp.array([1.0, 2.0, 3.0])",
+    "g = lambda y: jnp.max(y[:0], initial=0.0) + y.sum()",
+    "print(jax.jacrev(g)(y))",
+    "# output: [1. 1. 1.]",
+    "print(jax.jacfwd(g)(y))",
+    "# desired: [1. 1. 1.]",
+    "# actual:  [nan nan nan]"
   ],
   "cause": [
     "`_reduce_chooser_jvp_rule`, the JVP rule of `reduce_max` and `reduce_min`,",
@@ -33,30 +64,5 @@
     "For the jaxpr of `jnp.max(x, initial=0.)`, `Jax.Jaxpr.maxInitial_hasZeroJvp` proves that the derivative is 0",
     "and `Jax.Jaxpr.maxInitialJvp_not_correct` that forward mode is wrong."
   ],
-  "reproducer": [
-    "import jax",
-    "import jax.numpy as jnp",
-    "",
-    "x = jnp.zeros((2, 0))",
-    "f = lambda x: jnp.max(x, axis=1, initial=0.0)",
-    "print(f(x))",
-    "# output: [0. 0.]",
-    "",
-    "# f is constant, so its tangent is 0.",
-    "print(jax.jvp(f, (x,), (x,))[1])",
-    "# desired: [0. 0.]",
-    "# actual:  [nan nan]",
-    "print(jax.jvp(lambda x: jnp.min(x, axis=1, initial=0.0), (x,), (x,))[1])",
-    "# desired: [0. 0.]",
-    "# actual:  [nan nan]",
-    "",
-    "# The NaN reaches the Jacobian of an array that is not empty.",
-    "y = jnp.array([1.0, 2.0, 3.0])",
-    "g = lambda y: jnp.max(y[:0], initial=0.0) + y.sum()",
-    "print(jax.jacrev(g)(y))",
-    "# output: [1. 1. 1.]",
-    "print(jax.jacfwd(g)(y))",
-    "# desired: [1. 1. 1.]",
-    "# actual:  [nan nan nan]"
-  ]
+  "jax_version": "0.12.0.1"
 }

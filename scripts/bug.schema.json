@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "JAX bug",
-  "description": "A bug in JAX found with the Lean model. The file name is the identifier of the bug.",
+  "description": "A bug in JAX found with the Lean model. The file name is the identifier of the bug. The fields from title to fix, and jax_version, are the sections of an upstream issue, in this order.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "status", "primitive", "jax_version", "source", "lean_refutation", "upstream_issue", "summary", "cause", "fix", "lean", "reproducer"],
+  "required": ["title", "status", "primitive", "source", "lean_refutation", "upstream_issue", "description", "expected", "reproducer", "cause", "fix", "lean", "jax_version"],
   "properties": {
     "$schema": { "type": "string" },
     "title": {
@@ -17,10 +17,6 @@
     },
     "primitive": {
       "description": "The lax primitive, as named in lax.",
-      "type": "string"
-    },
-    "jax_version": {
-      "description": "The JAX version on which the bug was found.",
       "type": "string"
     },
     "source": {
@@ -37,12 +33,20 @@
       "type": ["string", "null"],
       "format": "uri"
     },
-    "fixed_in": {
-      "description": "The first JAX version that contains a fix.",
-      "type": "string"
+    "description": {
+      "description": "What goes wrong, as a user of JAX sees it, in Markdown, one line per array entry: the input that triggers the bug, what JAX does, and which cases are affected. The title, description, expected, reproducer, cause and fix stand alone, as in an upstream issue: they do not mention Lean, the model or files of this repository. scripts/bugs.py checks this.",
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
     },
-    "summary": {
-      "description": "What goes wrong, as a user of JAX sees it, in Markdown, one line per array entry. The title, summary, cause, fix and reproducer stand alone, as in an upstream issue: they do not mention Lean, the model or files of this repository. scripts/bugs.py checks this.",
+    "expected": {
+      "description": "What JAX should do instead, and on what authority: the docstring, the StableHLO spec, the mathematics, or another path of JAX that gets it right. In Markdown, one line per array entry.",
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "reproducer": {
+      "description": "A Python script that runs on its own, one line per array entry. It prints what JAX computes, and a comment below each print states the output: `# output: <text>` where JAX is correct, and `# desired: <text>` followed by `# actual: <text>` where it is not. scripts/bugs.py checks that the script prints these outputs.",
       "type": "array",
       "items": { "type": "string" },
       "minItems": 1
@@ -72,11 +76,13 @@
       "minItems": 1,
       "uniqueItems": true
     },
-    "reproducer": {
-      "description": "A Python script that runs on its own, one line per array entry. It prints what JAX computes, and a comment below each print states the output: `# output: <text>` where JAX is correct, and `# desired: <text>` followed by `# actual: <text>` where it is not. scripts/bugs.py checks that the script prints these outputs.",
-      "type": "array",
-      "items": { "type": "string" },
-      "minItems": 1
+    "jax_version": {
+      "description": "The JAX version on which the bug was found.",
+      "type": "string"
+    },
+    "fixed_in": {
+      "description": "The first JAX version that contains a fix.",
+      "type": "string"
     }
   },
   "allOf": [

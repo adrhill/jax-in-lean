@@ -3,31 +3,20 @@
   "title": "`broadcast_in_dim` skips the transpose if the result shape equals the operand shape",
   "status": "proven",
   "primitive": "broadcast_in_dim",
-  "jax_version": "0.12.0.1",
   "source": "jax/_src/lax/lax.py:7583",
   "lean_refutation": "Jax.Lax.broadcastInDimFwd_not_correct",
   "upstream_issue": null,
-  "summary": [
+  "description": [
+    "If the result of `lax.broadcast_in_dim` has the shape of the operand, as for a square matrix,",
+    "JAX silently returns the operand, even if `broadcast_dimensions` permutes its axes.",
+    "The equation is dropped from the jaxpr, so this happens in eager mode, under `jit` and under differentiation.",
+    "Operands whose shape changes are transposed correctly."
+  ],
+  "expected": [
     "`lax.broadcast_in_dim` accepts `broadcast_dimensions` in any order,",
     "and its docstring uses `broadcast_dimensions=(1, 0)` as an implicit transpose.",
-    "But if the result has the shape of the operand, as for a square matrix,",
-    "JAX silently returns the operand instead of permuting its axes.",
-    "This happens in eager mode, under `jit` and under differentiation."
-  ],
-  "cause": [
-    "`_broadcast_in_dim_fwd_rule` forwards the operand whenever `shape` equals the operand shape,",
-    "without checking that `broadcast_dimensions` is the identity.",
-    "The equation is then dropped from the jaxpr."
-  ],
-  "fix": [
-    "Forward the operand only if `broadcast_dimensions` is also `(0, 1, …, ndim - 1)`."
-  ],
-  "lean": [
-    "`Jax.Lax.broadcastInDimFwd_correct` proves the rule correct if `broadcast_dimensions` is strictly increasing,",
-    "and `Jax.Lax.broadcastInDimFwd_not_correct` shows that it is wrong for `broadcast_dimensions = (1, 0)` and an operand of shape `(2, 2)`."
-  ],
-  "related": [
-    "broadcast-in-dim-transpose"
+    "So `broadcast_in_dim(x, (2, 2), (1, 0))` should return the transpose of `x`,",
+    "as `broadcast_in_dim(x, (2, 3), (1, 0))` does for `x` of shape `(3, 2)`."
   ],
   "reproducer": [
     "import jax",
@@ -55,5 +44,21 @@
     "#              b:f32[2,2] = broadcast_in_dim[broadcast_dimensions=(1, 0)] a",
     "#            in (b,) }",
     "# actual:  { lambda ; a:f32[2,2]. let  in (a,) }"
-  ]
+  ],
+  "cause": [
+    "`_broadcast_in_dim_fwd_rule` forwards the operand whenever `shape` equals the operand shape,",
+    "without checking that `broadcast_dimensions` is the identity.",
+    "The equation is then dropped from the jaxpr."
+  ],
+  "fix": [
+    "Forward the operand only if `broadcast_dimensions` is also `(0, 1, …, ndim - 1)`."
+  ],
+  "lean": [
+    "`Jax.Lax.broadcastInDimFwd_correct` proves the rule correct if `broadcast_dimensions` is strictly increasing,",
+    "and `Jax.Lax.broadcastInDimFwd_not_correct` shows that it is wrong for `broadcast_dimensions = (1, 0)` and an operand of shape `(2, 2)`."
+  ],
+  "related": [
+    "broadcast-in-dim-transpose"
+  ],
+  "jax_version": "0.12.0.1"
 }
