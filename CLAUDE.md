@@ -16,9 +16,10 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 ├── Lax/<Name>.lean # One file per lax primitive: differentiation rules and proofs
 │                   # (the six comparisons share Lax/Compare.lean)
 └── Jaxpr/<Name>.lean # Jaxprs of several primitives, e.g. from upstream issues
+Audit.lean          # Axiom check, and the registry of every settled property
 bugs/<name>.json    # One record per JAX bug, with its reproducer
 bugs/CLAUDE.md      # How to write a bug record
-scripts/audit.sh    # Forbidden-token scan, build, bug reproducers, shapes.py
+scripts/audit.sh    # Forbidden-token scan, build, Audit.lean, bug reproducers, shapes.py
 scripts/bugs.py     # Checks the bug records and runs their reproducers
 scripts/shapes.py   # Shape- and dtype-level differential test of the model against JAX
 gen/                # Generated Lean files of scripts/shapes.py (gitignored)
@@ -89,6 +90,11 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 
 - No `sorry`, `admit`, `native_decide`, `axiom`, `unsafe` or `implemented_by`.
   Only the standard axioms `propext`, `Classical.choice` and `Quot.sound` may appear.
+  `Audit.lean` collects the axioms of every declaration of the model and fails on any other.
+- Every theorem about a rule and every refutation in `Jax/Lax/` and `Jax/Jaxpr/` has an entry
+  in the registry of `Audit.lean`: proven, refuted with the bug record that shows it on JAX,
+  or refuted with the reason why it is not a bug.
+  Every definition of a rule file occurs in a registered statement, or is listed there as unsettled.
 - The first theorem for a primitive `foo` is `fooJvp_correct`, stated with `IsJvpOf` or `IsJvp₂Of`,
   or with `IsJvpOfOn` or `IsJvp₂OfOn` and the largest domain on which it holds.
 - Never weaken a statement to make it provable.

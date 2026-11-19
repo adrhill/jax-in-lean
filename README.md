@@ -22,7 +22,8 @@ mirror the source in Lean, state properties, and settle each one as proven or re
 | `Jax/Lax/<Name>.lean` | The differentiation rules of one primitive, with proofs. |
 | `bugs/` | The JAX bugs found so far, one JSON record each, with a reproducer. |
 | `scripts/shapes.py` | Checks the shapes and dtypes that the model computes against those that JAX traces. |
-| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, runs the reproducers, and the shape and dtype test. |
+| `Audit.lean` | Checks that the model depends only on the standard axioms, and lists every settled property: proven, a bug, or refuted without being a bug. |
+| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, runs `Audit.lean`, the reproducers, and the shape and dtype test. |
 | `pyproject.toml` | Pins the JAX version being modelled. |
 
 ## Scope
