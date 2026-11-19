@@ -8,6 +8,7 @@ public import Jax.Jaxpr.SqrtRelu
 public import Jax.Lax.BroadcastInDim
 public import Jax.Lax.Clamp
 public import Jax.Lax.Compare
+public import Jax.Lax.ConvertElementType
 public import Jax.Lax.Cos
 public import Jax.Lax.Cumsum
 public import Jax.Lax.Div

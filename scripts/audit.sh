@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fails if the Lean sources contain an escape hatch, if the build fails,
 # if a bug reproducer no longer shows its bug on the pinned JAX,
-# or if the shapes of the model disagree with those of the pinned JAX.
+# or if the shapes or dtypes of the model disagree with those of the pinned JAX.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

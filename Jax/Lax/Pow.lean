@@ -6,19 +6,24 @@ public import Mathlib.Analysis.SpecialFunctions.Pow.Deriv
 /-!
 # `pow`
 
-Differentiation rules of the `pow` primitive of `jax/_src/lax/lax.py`, for a floating-point exponent.
+Differentiation rules of the `pow` primitive of `jax/_src/lax/lax.py`,
+for a floating-point exponent and, as `powInt`, for an integer exponent.
 
 The JVP rules are correct where the base is positive.
 For a constant exponent, the rule for the base is correct where `x ^ y` is differentiable in `x`,
 except at `x = 0` for `y = 0`.
 There `x ↦ x ^ 0` is the constant `1`, but the rule returns `0 * 0 ^ (-1) = 0 * ∞ = NaN`.
+
+For an integer exponent, the rule for the base selects `0` where `y = 0`,
+and is correct wherever `x ↦ x ^ y` is finite near `x`.
+An integer exponent has a `float0` tangent, so the rule for the exponent is not evaluated.
 -/
 
 @[expose] public section
 
 namespace Jax.Lax
 
-variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth}
+variable {n : ℕ} {sx sy : Shape n} {w : FloatWidth} {wi : IntWidth}
 
 theorem broadcastable_powJvpLeft₁ (h : Broadcastable sx sy) :
     Broadcastable sx (broadcastShape sy sy) :=
@@ -76,6 +81,42 @@ noncomputable def powJvpRight (h : Broadcastable sx sy) (g : Tensor (.float w) (
     (ans : Tensor (.float w) (Index (broadcastShape sx sy))) (x : Tensor (.float w) (Index sx)) (_y : Tensor (.float w) (Index sy)) :
     Tensor (.float w) (Index (broadcastShape sy (broadcastShape sx (broadcastShape sx sy)))) :=
   mul (broadcastable_powJvpRight h) g (mul (broadcastable_left sx sy) (log (replaceZero x)) ans)
+
+open scoped Classical in
+/-- The JVP rule of `pow` for its first argument, for an integer exponent.
+The result dtype is that of `x`, so `convert_element_type` returns `x` unchanged and converts `y` to it.
+Where the shapes agree, `_maybe_broadcast` would return its argument, so both branches broadcast.
+`select`, `eq` and the elementwise arithmetic of `jac` are folded into one expression per entry,
+as in `replaceZero`.
+`jax/_src/lax/lax.py:5336`:
+```
+def _pow_jvp_lhs(g, ans, x, y):
+  y_dtype = dtypes.dtype(y)
+  result_dtype = dtypes.result_type(x, y)
+  if result_dtype == bool:
+    result_dtype = 'int32'
+  x = convert_element_type(x, result_dtype)
+  y = convert_element_type(y, result_dtype)
+  if dtypes.issubdtype(y_dtype, np.integer):
+    if x.shape != y.shape:
+      shape = broadcast_shapes(x.shape, y.shape)
+      sharding = broadcast_shardings(typeof(x), typeof(y))
+      x = _maybe_broadcast(shape, x, sharding)
+      y = _maybe_broadcast(shape, y, sharding)
+    jac = select(eq(y, _const(y, 0)), _zeros(y),
+                 mul(_replace_zero(y), pow(x, sub(y, _ones(y)))))
+  else:
+    ...
+  return mul(g, jac)
+``` -/
+noncomputable def powIntJvpLeft (h : Broadcastable sx sy) (g : Tensor (.float w) (Index sx))
+    (_ans : Tensor (.float w) (Index (broadcastShape sx sy))) (x : Tensor (.float w) (Index sx))
+    (y : Tensor (.int wi) (Index sy)) :
+    Tensor (.float w) (Index (broadcastShape sx (broadcastShape sx sy))) :=
+  let x' := maybeBroadcast (broadcastShape sx sy) (prod_maybeBroadcast (broadcastsTo_left sx sy)) x
+  let y' := maybeBroadcast (broadcastShape sx sy) (prod_maybeBroadcast h.right) (convertInt (w := w) y)
+  mul (broadcastable_left sx sy) g fun j =>
+    if (y' j).eq 0 then 0 else replaceZero y' j * (x' j).pow (y' j + -1)
 
 /-! ## Proofs -/
 
@@ -211,6 +252,66 @@ theorem powJvpLeft_correct (h : Broadcastable sx sy) (y : Index sy → ℝ) :
     simp only [ContinuousLinearMap.pi_apply, smul_apply,
       ContinuousLinearMap.proj_apply, smul_eq_mul, ux, uy]
     ring
+
+open scoped Classical in
+/-- For a constant integer exponent `y`, the JVP rule of `pow` for the base computes the derivative of
+`x ↦ x ^ y` wherever it is finite near `x`: where `x ≠ 0` or `y ≥ 0`. -/
+theorem powIntJvpLeft_correct (h : Broadcastable sx sy) (y : Tensor (.int wi) (Index sy)) :
+    IsJvpOfOn (fun g x => powIntJvpLeft h g (powInt h x y) x y) (powInt (w := w) h · y)
+      {x | ∀ j : Index (broadcastShape sx sy),
+        x (j.unbroadcast (broadcastsTo_left sx sy)) ≠ 0 ∨ 0 ≤ y (j.unbroadcast h.right)} := by
+  intro x hx
+  let ux : Index (broadcastShape sx sy) → Index sx :=
+    fun j => j.unbroadcast (broadcastsTo_left sx sy)
+  let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right
+  -- On the domain, `pow` of finite values is the integer power.
+  have hfin : ∀ (a : ℝ) (k : ℤ), a ≠ 0 ∨ 0 ≤ k →
+      (Scalar.fin (w := w) a).pow (.fin (k : ℝ)) = .fin (a ^ k) := fun a k ha => by
+    rw [Scalar.pow_fin (.inr ⟨⟨k, rfl⟩, ha.imp_right fun hk => by exact_mod_cast hk⟩), Real.rpow_intCast]
+  refine ⟨fun z j => z (ux j) ^ y (uy j),
+    ContinuousLinearMap.pi fun j => ((y (uy j) : ℝ) * x (ux j) ^ (y (uy j) - 1)) •
+      ContinuousLinearMap.proj (ux j), ?_, ?_, fun g => ?_⟩
+  · have hopen : IsOpen {z : Index sx → ℝ | ∀ j, z (ux j) ≠ 0 ∨ 0 ≤ y (uy j)} := by
+      simp only [Set.ofPred_forall, Set.ofPred_or]
+      exact isOpen_iInter_of_finite fun j =>
+        (isOpen_ne_fun (continuous_apply _) continuous_const).union isOpen_const
+    filter_upwards [hopen.mem_nhds hx] with z hz
+    funext j
+    exact hfin _ _ (hz j)
+  · exact hasFDerivAt_pi.2 fun j => hasFDerivAt_elementwise x (ux j) (hasDerivAt_zpow _ _ (hx j))
+  · refine Tensor.same_of_shape_eq (fun d => ?_) fun i j hij => ?_
+    · have := h d
+      simp only [broadcastShape]
+      split_ifs <;> omega
+    · have e1 : i.unbroadcast (broadcastsTo_left sx (broadcastShape sx sy)) = ux j :=
+        Index.unbroadcast_congr _ _ i j hij
+      have e2 : ∀ {t : Shape n} (hb : BroadcastsTo t (broadcastShape sx sy)),
+          (i.unbroadcast (broadcastable_left sx sy).right).unbroadcast hb = j.unbroadcast hb := fun hb => by
+        rw [Index.unbroadcast_unbroadcast]
+        exact Index.unbroadcast_congr _ _ i j hij
+      simp only [powIntJvpLeft, mul, binop, e1, replaceZero]
+      rw [maybeBroadcast_apply h.right, maybeBroadcast_apply (broadcastsTo_left sx sy), e2, e2]
+      change Scalar.fin (g (ux j)) * (if (Scalar.fin (w := w) (y (uy j) : ℝ)).eq 0 then 0 else
+        (if (Scalar.fin (w := w) (y (uy j) : ℝ)).eq 0 then 1 else Scalar.fin (y (uy j) : ℝ)) *
+          (Scalar.fin (x (ux j))).pow (.fin (y (uy j) : ℝ) + -1)) =
+        Scalar.fin ((y (uy j) : ℝ) * x (ux j) ^ (y (uy j) - 1) * g (ux j))
+      by_cases hy : y (uy j) = 0
+      · simp [hy, Scalar.zero_def]
+      · have hy' : ¬ (Scalar.fin (w := w) (y (uy j) : ℝ)).eq 0 := by
+          simpa [Scalar.zero_def] using hy
+        have hk : x (ux j) ≠ 0 ∨ 0 ≤ y (uy j) - 1 := (hx j).imp_right fun h0 => by
+          obtain ⟨k, hk⟩ : ∃ k : ℤ, y (uy j) = k := ⟨_, rfl⟩
+          have h1 : 0 ≤ k := hk ▸ h0
+          have h2 : k ≠ 0 := hk ▸ hy
+          rw [hk]
+          show (0 : ℤ) ≤ k - 1
+          omega
+        have hp := hfin (x (ux j)) (y (uy j) - 1) hk
+        push_cast at hp
+        simp only [hy', ↓reduceIte]
+        rw [Scalar.one_def, Scalar.neg_fin, Scalar.fin_add_fin, ← sub_eq_add_neg, hp, Scalar.fin_mul_fin,
+          Scalar.fin_mul_fin]
+        exact congrArg Scalar.fin (by ring)
 
 /-! ## Refutation -/
 

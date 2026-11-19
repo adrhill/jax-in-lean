@@ -198,8 +198,16 @@ protected def ge (x y : Scalar w) : Prop := x.gt y ∨ x.eq y
 /-- The comparison `x <= y`. False if either argument is NaN. -/
 protected def le (x y : Scalar w) : Prop := y.gt x ∨ x.eq y
 
+/-- The same value at the width `w'`. Values are exact, so a conversion between widths changes no value. -/
+def cast {w' : FloatWidth} : Scalar w → Scalar w'
+  | fin x => fin x
+  | posInf => posInf
+  | negInf => negInf
+  | nan => nan
+
 /-! ## Finite values -/
 
+@[simp] theorem cast_fin {w' : FloatWidth} (x : ℝ) : (fin x : Scalar w).cast = (fin x : Scalar w') := rfl
 @[simp] theorem fin_add_fin (x y : ℝ) : (fin x : Scalar w) + fin y = fin (x + y) := rfl
 @[simp] theorem fin_mul_fin (x y : ℝ) : (fin x : Scalar w) * fin y = fin (x * y) := rfl
 @[simp] theorem neg_fin (x : ℝ) : -(fin x : Scalar w) = fin (-x) := rfl

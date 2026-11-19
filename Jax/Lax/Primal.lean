@@ -13,7 +13,7 @@ Arguments that a primitive requires to have the same dtype share the dtype in it
 Floating-point primitives take a width `w`, and those that only move entries,
 such as `pad`, `slice` and `broadcastInDim`, take any dtype `d`.
 Comparisons return booleans, and the indices of `gather` and `scatter` are integers of a width `wi`.
-Integer semantics of the arithmetic primitives are not modelled.
+Arithmetic on integer arrays is not modelled, except an integer exponent of `pow` (`powInt`).
 -/
 
 @[expose] public section
@@ -108,6 +108,20 @@ noncomputable def constMul (c : Scalar w) (x : Tensor (.float w) ι) : Tensor (.
 so the result has the shape of `y`. -/
 noncomputable def constDiv (c : Scalar w) (y : Tensor (.float w) ι) : Tensor (.float w) ι := fun i => c / y i
 
+/-! ## Conversions
+`lax.convert_element_type`, `jax/_src/lax/lax.py:1713`, lowers to
+[StableHLO `convert`](https://openxla.org/stablehlo/spec#convert).
+Values are exact, so a conversion to a floating-point dtype changes no value. -/
+
+/-- `lax.convert_element_type` from `bool` to a floating-point dtype: `1` for true and `0` for false. -/
+def convertBool {ι : Type} (x : Tensor .bool ι) : Tensor (.float w) ι := fun i => if x i then 1 else 0
+
+/-- `lax.convert_element_type` from a signed integer dtype to a floating-point dtype: the integer `k` becomes `k`. -/
+def convertInt {ι : Type} (x : Tensor (.int wi) ι) : Tensor (.float w) ι := fun i => .fin (x i)
+
+/-- `lax.convert_element_type` from the floating-point dtype of width `w` to that of width `w'`. -/
+def convertFloat {w' : FloatWidth} {ι : Type} (x : Tensor (.float w) ι) : Tensor (.float w') ι := fun i => (x i).cast
+
 /-! ## Elementwise binary primitives -/
 
 /-- An elementwise binary primitive, which broadcasts its arguments against each other.
@@ -137,11 +151,28 @@ noncomputable def sub (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx
 
 /-- `lax.pow`, elementwise power `x ^ y` for a floating-point `y`. `jax/_src/lax/lax.py:942`.
 It lowers to [StableHLO `power`](https://openxla.org/stablehlo/spec#power),
-which is `pow` of IEEE 754 for floating-point arguments.
-Integer exponents are not modelled. -/
+which is `pow` of IEEE 754 for floating-point arguments. -/
 noncomputable def pow (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx)) (y : Tensor (.float w) (Index sy)) :
     Tensor (.float w) (Index (broadcastShape sx sy)) :=
   binop Scalar.pow h x y
+
+/-- `lax.pow` for an integer exponent `y`, whose result has the dtype of `x`.
+`_pow_dtype_rule`, `jax/_src/lax/lax.py:5323`, accepts a floating-point `x` with an integer `y`:
+```
+  if (dtypes.issubdtype(x.dtype, np.inexact) and
+      dtypes.issubdtype(y.dtype, np.integer)):
+    return x.dtype
+```
+`_pow_lower` converts `y` to the dtype of the result before StableHLO `power`, `jax/_src/lax/lax.py:5361`:
+```
+  if x_aval.dtype != y_aval.dtype:
+    out_aval, = ctx.avals_out
+    y_aval = y_aval.update(dtype=out_aval.dtype)
+    y = hlo.convert(mlir.aval_to_ir_type(ctx.module_context, y_aval), y)
+``` -/
+noncomputable def powInt (h : Broadcastable sx sy) (x : Tensor (.float w) (Index sx))
+    (y : Tensor (.int wi) (Index sy)) : Tensor (.float w) (Index (broadcastShape sx sy)) :=
+  pow h x (convertInt y)
 
 /-- `lax.rem`, elementwise remainder with the sign of the dividend `x`. `jax/_src/lax/lax.py:1357`.
 It lowers to [StableHLO `remainder`](https://openxla.org/stablehlo/spec#remainder):
@@ -439,10 +470,6 @@ Duplicate and out-of-bounds axes, which `_reduce_op_shape_rule` rejects, are not
 def reduceMax {s : Shape n} (axes : Finset (Fin n)) (operand : Tensor (.float w) (Index s)) :
     Tensor (.float w) (Index (s ∘ keptAxes axes)) :=
   fun j => ({i | i.proj (keptAxes axes) = j} : Finset (Index s)).fold Scalar.max .negInf operand
-
-/-- `lax.convert_element_type` from `bool` to a floating-point dtype: `1` for true and `0` for false.
-`jax/_src/lax/lax.py:1713`. It lowers to [StableHLO `convert`](https://openxla.org/stablehlo/spec#convert). -/
-def convertBool {ι : Type} (x : Tensor .bool ι) : Tensor (.float w) ι := fun i => if x i then 1 else 0
 
 /-- `lax.cumsum`, the cumulative sum along `axis`:
 entry `j` is the sum of the entries at or before `j` on `axis`, and at or after `j` if `reverse`.

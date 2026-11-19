@@ -17,17 +17,21 @@ mirror the source in Lean, state properties, and settle each one as proven or re
 
 | Path | Contents |
 |---|---|
-| `Jax/Scalar.lean`, `Jax/Shape.lean`, `Jax/Core.lean` | Array entries, shapes, and what it means for a rule to be correct. |
+| `Jax/Scalar.lean`, `Jax/DType.lean`, `Jax/Shape.lean`, `Jax/Core.lean` | Array entries, dtypes, shapes, and what it means for a rule to be correct. |
 | `Jax/Lax/Primal.lean` | What each `lax` primitive computes. |
 | `Jax/Lax/<Name>.lean` | The differentiation rules of one primitive, with proofs. |
 | `bugs/` | The JAX bugs found so far, one JSON record each, with a reproducer. |
-| `scripts/shapes.py` | Checks the shapes that the model computes against the shapes that JAX traces. |
-| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, runs the reproducers and the shape test. |
+| `scripts/shapes.py` | Checks the shapes and dtypes that the model computes against those that JAX traces. |
+| `scripts/audit.sh` | Rejects `sorry`, new axioms and other escape hatches, builds, runs the reproducers, and the shape and dtype test. |
 | `pyproject.toml` | Pins the JAX version being modelled. |
 
 ## Scope
 
-- Arrays hold exact real numbers, infinities and NaN. Rounding, overflow and signed zeros are out of scope for now.
+- Float arrays hold exact real numbers, infinities and NaN. Rounding, overflow and signed zeros are out of scope for now.
+- Dtypes are modelled: booleans, integers and floats of each width, and `float0` tangents.
+  Values do not depend on the width, but arguments of different dtypes are rejected as in JAX,
+  and a rule that returns the wrong dtype can be refuted.
+  Integer arithmetic, unsigned integers, `jax_enable_x64` and weak types are not modelled.
 - Shapes, axes and broadcasting are modelled, so a rule that returns the wrong shape can be refuted.
 - The model lives at the level of jaxprs and `lax` primitives, not Python or `jax.numpy`.
 - The first property proven for every primitive is that its JVP rule computes its derivative.
@@ -41,11 +45,12 @@ A bug with the status `proven` has been shown on JAX, and its cause has been pro
 The script confirms the bug, and the Lean theorem explains it,
 which carries over to JAX only as far as the model is faithful to the source.
 
-Faithfulness is tested at the level of shapes.
+Faithfulness is tested at the level of shapes and dtypes.
 `scripts/shapes.py` traces every modelled primitive and rule on abstract inputs in JAX,
 calling the registered JVP and transpose rules directly, and also `jax.jvp` and `jax.vjp`.
-Lean then checks with `decide` that the shapes in the types of the model's definitions are the same,
+Lean then checks with `decide` that the shapes and dtypes in the types of the model's definitions are the same,
 and that JAX raises exactly when a proof argument of the model is false.
+It also checks with `#check` and `#check_failure` that Lean rejects arguments of different dtypes exactly when JAX does.
 The test compares the model with JAX, not with the mathematics, so JAX's bugs pass it.
 
 ## Setup

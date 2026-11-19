@@ -70,6 +70,8 @@ def generate_cases():
     for prim in ("sin", "cos", "log", "sqrt", "exp"):
         cases += [(prim, {"s": s}) for s in all_shapes()]
     cases += [("integer_pow", {"s": s, "y": y}) for s in all_shapes() for y in range(-4, 6)]
+    # convert_element_type to every float width; the widths loop below sets the width of the operand.
+    cases += [("convert_element_type", {"s": s, "to": to}) for s in all_shapes() for to in FLOATS]
     # Helpers of rules that have no rules of their own in the model.
     for prim in ("sign", "floor", "abs"):
         cases += [(prim, {"s": s}) for s in all_shapes()]
@@ -77,6 +79,10 @@ def generate_cases():
         cases += [
             (prim, {"sx": a, "sy": b}) for r in range(4) for a in shapes(r) for b in shapes(r)
         ]
+    # pow with an integer exponent.
+    cases += [
+        ("pow_int", {"sx": a, "sy": b}) for r in range(3) for a in shapes(r) for b in shapes(r)
+    ]
     # select_n with a boolean `which`: cases of equal or different shapes, of the same or another rank,
     # and `which` a scalar, of the shape of the first case, of another shape or of another rank.
     for r in range(4):
@@ -270,7 +276,7 @@ def generate_cases():
     # The indices of gather and scatter have every integer width.
     widths = []
     for i, (prim, p) in enumerate(cases):
-        if prim in ("gather", *SCATTER):
+        if prim in ("gather", *SCATTER, "pow_int"):
             p = {**p, "it": INTS[i % len(INTS)]}
         widths.append((prim, {**p, "dt": "float32"}))
         if i % 8 in (1, 5):
@@ -291,6 +297,7 @@ INTS = ("int8", "int16", "int32")
 # Primitives whose arguments get several dtypes: the kinds of dtypes of the arguments in the model.
 DTYPE_CASES = {
     **dict.fromkeys(("mul", "div", "max", "pow", "rem", *COMPARE), ("float", "float")),
+    "pow_int": ("float", "int"),
     "select_n": ("bool", "float", "float"),
     "clamp": ("float", "float", "float"),
     # The coefficients, which the model takes as one family of arrays of one dtype.
@@ -466,6 +473,8 @@ def jax_record(case):
         elif of in SCATTER:
             fn = lambda x, i, u: getattr(lax, of)(x, i, u, dn_s, mode="fill")
             shapes_ = [(3,), (2, 1), (2,)]
+        elif of == "pow_int":
+            fn, shapes_ = lax.pow, [(2,), (2,)]
         else:
             fn, shapes_ = getattr(lax, of), [(2,), (2,)]
         rec["primal"] = trace(fn, *(jax.ShapeDtypeStruct(s, d) for s, d in zip(shapes_, dts)))
@@ -473,6 +482,44 @@ def jax_record(case):
         unary(getattr(lax, prim), getattr(L, f"{prim}_p"), p["s"], ans=prim in ("sqrt", "exp"))
     elif prim == "integer_pow":
         unary(lax.integer_pow, L.integer_pow_p, p["s"], y=p["y"])
+    elif prim == "convert_element_type":
+        s, to = p["s"], jnp.dtype(p["to"])
+
+        def conv(x):
+            return lax.convert_element_type(x, to)
+
+        rec["primal"] = trace(conv, s)
+        # A conversion to the same dtype returns the operand and binds no primitive.
+        if "error" not in rec["primal"] and to != DT:
+            params = params_of(conv, L.convert_element_type_p, s)
+            (conv_jvp,) = jvp_rules(L.convert_element_type_p)
+            # `ad.defjvp2` passes the primal result `ans` after the tangent.
+            rec["jvp"] = trace(lambda g, x: conv_jvp(g, conv(x), x, **params), s, s)
+            tr = ad.primitive_transposes[L.convert_element_type_p]
+            out = jax.ShapeDtypeStruct(tuple(s), to)
+            rec["transpose"] = trace(lambda ct: tr(ct, undefined(s), **params)[0], out)
+            rec["user_jvp"] = trace(lambda x, t: jax.jvp(conv, (x,), (t,))[1], s, s)
+            rec["user_vjp"] = trace(lambda x, ct: jax.vjp(conv, x)[1](ct), s, out)
+    elif prim == "pow_int":
+        sx, sy = p["sx"], p["sy"]
+        y_ = jax.ShapeDtypeStruct(tuple(sy), IT)
+        rec["primal"] = trace(lax.pow, sx, y_)
+        if "error" not in rec["primal"]:
+            params = params_of(lax.pow, L.pow_p, sx, y_)
+            left, _ = jvp_rules(L.pow_p)
+            # `ad.defjvp2` passes the primal result `ans` after the tangent.
+            rec["jvp_left"] = trace(
+                lambda g, x, y: left(g, lax.pow(x, y), x, y, **params), sx, sx, y_
+            )
+            rec["user_jvp"] = trace(
+                lambda x, y, t: jax.jvp(lambda x: lax.pow(x, y), (x,), (t,))[1], sx, y_, sx
+            )
+            rec["user_vjp"] = trace(
+                lambda x, y, ct: jax.vjp(lambda x: lax.pow(x, y), x)[1](ct),
+                sx,
+                y_,
+                rec["primal"]["shape"],
+            )
     elif prim in ("sign", "floor", "abs"):
         rec["primal"] = trace(getattr(lax, prim), p["s"])
     elif prim in ("mul", "div", "max", "pow", "rem"):
@@ -1004,6 +1051,20 @@ def lean_spec(prim, p):
         return [], {"primal": primal, "jvp": jvp}, [("jvp", "primal")]
     if prim in ("sign", "floor", "abs"):
         return [], {"primal": f"Lax.{prim} (0 : Tensor {F} (Index {lshape(p['s'])}))"}, []
+    if prim == "convert_element_type":
+        S, TO = lshape(p["s"]), f"(w' := .{LDT[p['to']].split('.')[-1]})"
+        terms = {"primal": f"convertFloat {TO} (0 : Tensor {F} (Index {S}))"}
+        vjp = []
+        if p["to"] != p["dt"]:
+            terms["jvp"] = f"convertFloatJvp (s := {S}) {W} {TO} 0 0 0"
+            terms["transpose"] = f"convertFloatTranspose (s := {S}) {W} {TO} 0"
+            vjp = [("jvp", "primal"), ("transpose", p["s"])]
+        return [], terms, vjp
+    if prim == "pow_int":
+        SX, SY = lshape(p["sx"]), lshape(p["sy"])
+        imp = f"(sx := {SX}) (sy := {SY}) {W} {WI} PROOF0"
+        terms = {"primal": f"Lax.powInt {imp} 0 0", "jvp_left": f"powIntJvpLeft {imp} 0 0 0 0"}
+        return [(f"Broadcastable {SX} {SY}", ("Broadcastable",))], terms, [("jvp_left", "primal")]
     if prim in ("mul", "div", "max", "pow", "rem"):
         SX, SY = lshape(p["sx"]), lshape(p["sy"])
         imp = f"(sx := {SX}) (sy := {SY}) {W} PROOF0"
@@ -1397,8 +1458,9 @@ def dtype_term(p):
             f"{lscatter([[], [0], [0], [], []])} {LMODE['fill']} (by decide) "
             f"{arr(0, [3])} {arr(1, [2, 1])} {arr(2, [2])}"
         )
+    name = "powInt" if of == "pow_int" else of
     return (
-        f"Lax.{of} (sx := {v2}) (sy := {v2}) (by unfold Broadcastable; decide) "
+        f"Lax.{name} (sx := {v2}) (sy := {v2}) (by unfold Broadcastable; decide) "
         f"{arr(0, [2])} {arr(1, [2])}"
     )
 
@@ -1508,6 +1570,8 @@ VJP_INPUTS = {
     "sqrt": ["s"],
     "exp": ["s"],
     "integer_pow": ["s"],
+    "convert_element_type": ["s"],
+    "pow_int": ["sx"],
     "select_n": ["s0", "s1"],
     "clamp": ["sl", "s", "sh"],
     "mul": ["sx", "sy"],
