@@ -39,15 +39,18 @@ theorem mulJvp_correct (h : Broadcastable sx sy) :
   let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right
   refine ⟨fun p j => p.1 (ux j) * p.2 (uy j), ContinuousLinearMap.pi fun j =>
     x (ux j) • (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _) +
-    y (uy j) • (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _), ?_, ?_, ?_⟩
+    y (uy j) • (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _), ?_, ?_, ?_, ?_⟩
   · exact .of_forall fun p => rfl
   · refine hasFDerivAt_pi.2 fun j => ?_
     exact (hasFDerivAt_fst_apply (ux j) (x, y)).mul (hasFDerivAt_snd_apply (uy j) (x, y))
-  · intro g k
-    refine ⟨fun j => g (ux j) * y (uy j), fun j => x (ux j) * k (uy j),
-      .of_eq rfl, .of_eq rfl, ?_⟩
-    ext j
-    simp [mul_comm, add_comm]
+  · intro g
+    refine .of_eq (funext fun j => congrArg Scalar.fin ?_)
+    simp [mul_comm]
+    rfl
+  · intro k
+    refine .of_eq (funext fun j => congrArg Scalar.fin ?_)
+    simp
+    rfl
 
 /-! ## Transpose rules -/
 

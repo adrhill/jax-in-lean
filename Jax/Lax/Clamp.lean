@@ -258,7 +258,7 @@ theorem clampJvp_correct :
     cx j • (ContinuousLinearMap.proj j ∘L ContinuousLinearMap.fst ℝ _ _ ∘L
       ContinuousLinearMap.snd ℝ _ _) +
     ch j • (ContinuousLinearMap.proj j ∘L ContinuousLinearMap.snd ℝ _ _ ∘L
-      ContinuousLinearMap.snd ℝ _ _), ?_, ?_, ?_⟩
+      ContinuousLinearMap.snd ℝ _ _), ?_, ?_, ?_, ?_, ?_⟩
   · exact .of_forall fun p => clamp_ofReal p.1 p.2.1 p.2.2
   · refine hasFDerivAt_pi.2 fun j => ?_
     rcases hdom j with h | ⟨h1, h2⟩ | ⟨h1, h2⟩
@@ -304,11 +304,20 @@ theorem clampJvp_correct :
       convert (hasFDerivAt_lo j (lo, x, hi)).congr_of_eventuallyEq hev using 1
       simp only [cl, cx, ch, h1, h2, hx, hh, and_self, ↓reduceIte, zero_smul, one_smul,
         add_zero]
-  · intro ga gb gc
-    refine ⟨_, _, _, .of_eq (clampJvpMin_ofReal ga lo x hi),
-      .of_eq (clampJvpOperand_ofReal gb lo x hi), .of_eq (clampJvpMax_ofReal gc lo x hi), ?_⟩
-    ext j
-    simp only [cl, cx, ch, ContinuousLinearMap.pi_apply, Pi.add_apply]
+  · intro ga
+    rw [clampJvpMin_ofReal]
+    refine .of_eq (congrArg ofReal (funext fun j => ?_))
+    simp only [cl, cx, ch, ContinuousLinearMap.pi_apply]
+    split_ifs <;> simp
+  · intro gb
+    rw [clampJvpOperand_ofReal]
+    refine .of_eq (congrArg ofReal (funext fun j => ?_))
+    simp only [cl, cx, ch, ContinuousLinearMap.pi_apply]
+    split_ifs <;> simp
+  · intro gc
+    rw [clampJvpMax_ofReal]
+    refine .of_eq (congrArg ofReal (funext fun j => ?_))
+    simp only [cl, cx, ch, ContinuousLinearMap.pi_apply]
     split_ifs <;> simp
 
 /-- Near a point where `x < hi < lo` in every entry, `clamp` is `hi`. -/
@@ -339,22 +348,18 @@ theorem clampJvp_not_correct :
   intro hc
   have hpt : ∀ j : Index ![1], (fun _ => (-1 : ℝ)) j < (fun _ => (0 : ℝ)) j ∧
       (fun _ => (0 : ℝ)) j < (fun _ => (2 : ℝ)) j := fun _ => by norm_num
-  obtain ⟨F, L, hF, hL, hrule⟩ := hc (fun _ => 2) (fun _ => -1) (fun _ => 0) (Set.mem_univ _)
+  obtain ⟨F, L, hF, hL, -, -, hmax⟩ := hc (fun _ => 2) (fun _ => -1) (fun _ => 0) (Set.mem_univ _)
   -- Near the point, `F` is the projection to `hi`, so `L` is too.
   have hev : F =ᶠ[nhds ((fun _ => 2), (fun _ => -1), (fun _ => 0))]
       (ContinuousLinearMap.snd ℝ _ _ ∘L ContinuousLinearMap.snd ℝ _ _ : (Triple ![1]) →L[ℝ] _) := by
     filter_upwards [hF, clamp_eventually_hi hpt] with q hq hq'
     rw [← hq', ← ofReal_injective.eq_iff, ← hq, clamp_ofReal]
   have hL' := hL.unique ((ContinuousLinearMap.hasFDerivAt _).congr_of_eventuallyEq hev)
-  -- The rules return zero for the tangent `1` of `hi`.
-  obtain ⟨da, db, dc, hda, hdb, hdc, hsum⟩ := hrule 0 0 1
+  -- The rule for `max` returns zero for the tangent `1` of `hi`.
   let j₀ : Index ![1] := fun _ => ⟨0, by simp⟩
-  have ha := congrFun (ofReal_injective ((Tensor.Same.of_eq (clampJvpMin_ofReal _ _ _ _)).unique hda)) j₀
-  have hb := congrFun (ofReal_injective ((Tensor.Same.of_eq (clampJvpOperand_ofReal _ _ _ _)).unique hdb)) j₀
-  have hc' := congrFun (ofReal_injective ((Tensor.Same.of_eq (clampJvpMax_ofReal _ _ _ _)).unique hdc)) j₀
-  have := congrFun hsum j₀
+  have := congrFun (ofReal_injective ((Tensor.Same.of_eq (clampJvpMax_ofReal _ _ _ _)).unique (hmax 1))) j₀
   rw [hL'] at this
-  norm_num [← ha, ← hb, ← hc'] at this
+  norm_num at this
 
 /-! ## Batching rule -/
 

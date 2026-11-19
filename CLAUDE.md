@@ -10,7 +10,7 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 ├── Scalar.lean     # Array entries: reals, infinities and NaN
 ├── DType.lean      # Dtypes: bool, int and float widths, float0, and tangent dtypes
 ├── Shape.lean      # Shape, Index, broadcasting
-├── Core.lean       # Tensor, IsJvpOf, IsJvp₂Of, IsTransposeOf and variants, Arr, IsBatchOf₁, IsBatchOf₃
+├── Core.lean       # Tensor, Tan, IsJvpOf, IsJvp₂Of, IsTransposeOf and variants, Arr, IsBatchOf₁, IsBatchOf₃
 ├── Lax/Primal.lean # Primal semantics of every primitive, and helpers that rules call
 ├── Lax/Dynamic.lean # The primitives on arrays of any shape and dtype: `none` if a check fails
 ├── Lax/<Name>.lean # One file per lax primitive: differentiation rules and proofs
@@ -59,6 +59,13 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
 - **Checks of rules.** A shape or dtype check inside a rule that does not follow from the checks of the primitive
   is a proof argument of the rule: the rule raises where it is false.
   A theorem `foo_not_defined` shows that it does not follow.
+- **Symbolic zeros.** A tangent or cotangent that a rule may receive as an `ad_util.Zero` is a `Tan`:
+  `.zero aval`, whose aval (shape and dtype) is data, or `.arr x`.
+  A rule that branches on `Zero` takes and returns `Tan`, and its correctness notion quantifies over every pattern of `Zero` inputs
+  that JAX passes to it (`IsJointJvp₂OfOn`, `IsTanTransposeOf`, `IsPartialTranspose₂Of`).
+  Rules of `ad.defjvp` follow `standard_jvp`: the rule of an input with a `Zero` tangent is not evaluated,
+  and `JVPTrace.process_primitive` calls no rule if every tangent is `Zero` (`IsJvp₂OfOn`, `standardJvp₂`).
+  A jaxpr composes the rules on `Tan` and instantiates the tangent of its result with `Tan.inst`.
 - **Linear inputs.** A transpose rule that handles several linear inputs takes every argument as an `Option`,
   where `none` is an `ad.UndefinedPrimal`, and returns `none` if it raises (`IsPartialTranspose₂Of`).
 - **Branching on shapes.** A rule that branches on the shapes of its arguments, such as a batching rule,
@@ -80,6 +87,8 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
   and checks with `decide` that the shapes and dtypes in the model's types agree,
   and that JAX rejects an input exactly when a proof argument is false.
   It checks with `#check` and `#check_failure` that JAX rejects arguments of different dtypes exactly when Lean does.
+  It calls every rule that branches on symbolic zeros on every pattern of `Zero` arguments,
+  and checks which results are `Zero`, their avals, and that JAX raises exactly where the model does.
   It also decides in Lean that every JVP rule of the model returns a tangent of the primal result,
   and every transpose rule a cotangent of its input, with their shapes and tangent dtypes;
   a violation is a bug, listed in `DOMAIN_BUGS` once it has a record.

@@ -42,6 +42,55 @@ def Tensor.Same {d d' : DType} {s : Shape m} {t : Shape n} (a : Tensor d (Index 
   ∃ hd : d = d', ∃ h : m = n, (∀ e, s e = t (Fin.cast h e)) ∧
     ∀ i j, (∀ e, (i e : ℕ) = j (Fin.cast h e)) → cast (congrArg DType.Elem hd) (a i) = b j
 
+/-! ## Symbolic zeros
+
+JAX passes a tangent or cotangent that is known to be zero as a symbolic zero, `ad_util.Zero`,
+which carries the aval of the array that it stands for and no entries.
+`jax/_src/ad_util.py:76`:
+```
+class Zero:
+  __slots__ = ['aval']
+  def __init__(self, aval: core.AbstractValue):
+    self.aval = aval
+```
+-/
+
+/-- The abstract value of an array, `core.ShapedArray`: its shape and dtype. -/
+structure Aval where
+  shape : List ℕ
+  dtype : DType
+  deriving DecidableEq
+
+/-- The aval of an array of dtype `d` and shape `s`. -/
+def Aval.of (d : DType) (s : Shape n) : Aval := ⟨List.ofFn s, d⟩
+
+/-- A tangent or cotangent as JAX passes it to and from a rule:
+a symbolic zero of an aval, or an array of dtype `d` with index type `ι`.
+The aval of a symbolic zero is data, as in JAX: the rule that creates it chooses it. -/
+inductive Tan (d : DType) (ι : Type) where
+  | zero (aval : Aval)
+  | arr (x : Tensor d ι)
+
+/-- `instantiate_zeros`, `jax/_src/interpreters/ad.py:1048`, for a floating-point tangent:
+a symbolic zero becomes the array of zeros `zeros_like_aval(aval)`.
+The zeros have the index type of the tangent, the shape of the aval wherever JAX instantiates. -/
+def Tan.inst {w : FloatWidth} {ι : Type} : Tan (.float w) ι → Tensor (.float w) ι
+  | .zero _ => 0
+  | .arr x => x
+
+/-- The tangent `a` is the floating-point array `b`:
+an array that is the same as `b`, or a symbolic zero with the aval of `b` where `b` is zero. -/
+def Tan.Same {s : Shape m} {t : Shape n} (a : Tan d (Index s)) (b : Tensor (.float w) (Index t)) : Prop :=
+  match a with
+  | .zero aval => aval = .of (.float w) t ∧ b = 0
+  | .arr x => x.Same b
+
+/-- The tangent of a floating-point argument of shape `s` in a pattern of symbolic zeros:
+the symbolic zero of its aval if `z`, and the finite array `g` otherwise.
+It stands for the real tangent `if z then 0 else g`. -/
+def Tan.ofReal (z : Bool) {s : Shape n} (g : Index s → ℝ) : Tan (.float w) (Index s) :=
+  if z then .zero (.of (.float w) s) else .arr (Jax.ofReal g)
+
 /-! ## JVP rules of unary primitives -/
 
 /-- `jvp` is a correct JVP rule for `f` at every finite array `x` in `dom`:
@@ -69,11 +118,13 @@ def IsJvpOf {s : Shape m} {t : Shape n} {t' : Shape n'}
 
 /-- `jvpX` and `jvpY` are correct JVP rules for the binary `f` at every pair of finite arrays in `dom`:
 near `(x, y)`, `f` computes a real function `F`, which is differentiable at `(x, y)`,
-both rules return finite arrays of the output shape,
-and their sum is the derivative of `F` at `(x, y)` applied to the finite tangents `(g, h)`.
-Both rules must return arrays of the dtype of the output of `f`, the dtype of its tangents.
+and each rule, applied to a finite tangent of its argument,
+returns the derivative of `F` at `(x, y)` applied to that tangent and a zero tangent of the other argument.
+Both rules must return arrays of the shape and dtype of the output of `f`, the dtype of its tangents.
 
-`ad.defjvp` takes one rule per argument and adds their results.
+`ad.defjvp` takes one rule per argument. `standard_jvp` evaluates the rule of each argument
+whose tangent is not a symbolic zero, and adds the results with `add_tangents`,
+which returns the other argument for a symbolic zero, starting from the symbolic zero of the output.
 `jax/_src/interpreters/ad.py:978`:
 ```
 def standard_jvp(jvprules, primitive, primals, tangents, **params):
@@ -82,7 +133,9 @@ def standard_jvp(jvprules, primitive, primals, tangents, **params):
                   if rule is not None and type(t) is not Zero]
   return val_out, functools.reduce(add_tangents, tangents_out, p2tz(val_out))
 ```
-Symbolic zero tangents are not modelled: both rules are always evaluated. -/
+So the result is correct for every pattern of symbolic zero tangents if and only if each rule is:
+if both rules are evaluated, the derivative applied to `(g, h)` is the sum of their results by linearity.
+`standardJvp₂_correct` states this for rules that return arrays of the same type. -/
 def IsJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {tx : Shape k} {ty : Shape k'}
     (jvpX : Tensor (.float wx) (Index sx) → Tensor (.float wx) (Index sx) →
       Tensor (.float wy) (Index sy) → Tensor d₁ (Index tx))
@@ -94,9 +147,8 @@ def IsJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {tx : Shape k} {ty
     ∃ (F : (Index sx → ℝ) × (Index sy → ℝ) → Index t → ℝ)
       (L : (Index sx → ℝ) × (Index sy → ℝ) →L[ℝ] Index t → ℝ),
     (∀ᶠ p in nhds (x, y), f (ofReal p.1) (ofReal p.2) = ofReal (F p)) ∧ HasFDerivAt F L (x, y) ∧
-    ∀ g h, ∃ dx dy : Index t → ℝ,
-      (jvpX (ofReal g) (ofReal x) (ofReal y)).Same (ofReal (w := w) dx) ∧
-      (jvpY (ofReal h) (ofReal x) (ofReal y)).Same (ofReal (w := w) dy) ∧ L (g, h) = dx + dy
+    (∀ g, (jvpX (ofReal g) (ofReal x) (ofReal y)).Same (ofReal (w := w) (L (g, 0)))) ∧
+    ∀ h, (jvpY (ofReal h) (ofReal x) (ofReal y)).Same (ofReal (w := w) (L (0, h)))
 
 /-- `jvpX` and `jvpY` are correct JVP rules for the binary `f` at every pair of finite arrays. -/
 def IsJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {tx : Shape k} {ty : Shape k'}
@@ -111,34 +163,85 @@ def IsJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {tx : Shape k} {ty :
 for a rule that takes the tangents of both arguments together,
 as the rules stored directly in `ad.primitive_jvps` do:
 near `(x, y)`, `f` computes a real function `F`, which is differentiable at `(x, y)`,
-and `jvp g h x y` is the derivative of `F` at `(x, y)` applied to the finite tangents `(g, h)`.
-The tangents come first, then the primals. -/
+and for every pattern of symbolic zero tangents, `jvp g h x y` is the derivative of `F` at `(x, y)`
+applied to the finite tangents `(g, h)`, with zeros at the symbolic zeros.
+A symbolic zero that the rule returns must have the aval of the output of `f`.
+The tangents come first, then the primals.
+
+`JVPTrace.process_primitive`, `jax/_src/interpreters/ad.py:551`, does not call the rule
+if every tangent is a symbolic zero:
+```
+    if (all(type(t) is Zero for t in tangents_in) and
+        not primitive.ref_allocating and
+        not any(isinstance(typeof(x), AbstractRef) for x in primals_in)):
+      avals = tuple(core.typeof(x) for x in primals_in)
+      return primitive.bind_with_trace(self.parent_trace, primals_in, avals, params)
+``` -/
 def IsJointJvp₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape k}
-    (jvp : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
-      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor d (Index t'))
+    (jvp : Tan (.float wx) (Index sx) → Tan (.float wy) (Index sy) →
+      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tan d (Index t'))
     (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t))
     (dom : Set ((Index sx → ℝ) × (Index sy → ℝ))) : Prop :=
   ∀ x y, (x, y) ∈ dom →
     ∃ (F : (Index sx → ℝ) × (Index sy → ℝ) → Index t → ℝ)
       (L : (Index sx → ℝ) × (Index sy → ℝ) →L[ℝ] Index t → ℝ),
     (∀ᶠ p in nhds (x, y), f (ofReal p.1) (ofReal p.2) = ofReal (F p)) ∧ HasFDerivAt F L (x, y) ∧
-    ∀ g h, (jvp (ofReal g) (ofReal h) (ofReal x) (ofReal y)).Same (ofReal (w := w) (L (g, h)))
+    ∀ (zg zh : Bool) g h, zg = false ∨ zh = false →
+      (jvp (.ofReal zg g) (.ofReal zh h) (ofReal x) (ofReal y)).Same
+        (ofReal (w := w) (L (if zg then 0 else g, if zh then 0 else h)))
 
 /-- `jvp` is a correct JVP rule for the binary `f`, taking both tangents together,
 at every pair of finite arrays. -/
 def IsJointJvp₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape k}
-    (jvp : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
-      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor d (Index t'))
+    (jvp : Tan (.float wx) (Index sx) → Tan (.float wy) (Index sy) →
+      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tan d (Index t'))
     (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)) : Prop :=
   IsJointJvp₂OfOn jvp f Set.univ
+
+/-- `jvp` is a correct JVP rule for the binary `f` with two results at every pair of finite arrays in `dom`,
+for a rule that takes the tangents of both arguments together, as `IsJointJvp₂OfOn` for each result.
+The rule returns the tangents of both results, and `none` if it raises:
+for every pattern of symbolic zero tangents that `JVPTrace.process_primitive` passes to it,
+the rule does not raise, and each tangent it returns is the derivative of that result. -/
+def IsJointJvp₂₂OfOn {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape n'} {u : Shape k}
+    {u' : Shape k'}
+    (jvp : Tan (.float wx) (Index sx) → Tan (.float wy) (Index sy) →
+      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
+      Option (Tan d₁ (Index u) × Tan d₂ (Index u')))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
+      Tensor (.float wx) (Index t) × Tensor (.float wy) (Index t'))
+    (dom : Set ((Index sx → ℝ) × (Index sy → ℝ))) : Prop :=
+  ∀ x y, (x, y) ∈ dom →
+    ∃ (F : (Index sx → ℝ) × (Index sy → ℝ) → Index t → ℝ)
+      (F' : (Index sx → ℝ) × (Index sy → ℝ) → Index t' → ℝ)
+      (L : (Index sx → ℝ) × (Index sy → ℝ) →L[ℝ] Index t → ℝ)
+      (L' : (Index sx → ℝ) × (Index sy → ℝ) →L[ℝ] Index t' → ℝ),
+    (∀ᶠ p in nhds (x, y), f (ofReal p.1) (ofReal p.2) = (ofReal (F p), ofReal (F' p))) ∧
+    HasFDerivAt F L (x, y) ∧ HasFDerivAt F' L' (x, y) ∧
+    ∀ (zg zh : Bool) g h, zg = false ∨ zh = false →
+      ∃ a b, jvp (.ofReal zg g) (.ofReal zh h) (ofReal x) (ofReal y) = some (a, b) ∧
+        a.Same (ofReal (w := wx) (L (if zg then 0 else g, if zh then 0 else h))) ∧
+        b.Same (ofReal (w := wy) (L' (if zg then 0 else g, if zh then 0 else h)))
+
+/-- `jvp` is a correct JVP rule for the binary `f` with two results at every pair of finite arrays. -/
+def IsJointJvp₂₂Of {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape n'} {u : Shape k}
+    {u' : Shape k'}
+    (jvp : Tan (.float wx) (Index sx) → Tan (.float wy) (Index sy) →
+      Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
+      Option (Tan d₁ (Index u) × Tan d₂ (Index u')))
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) →
+      Tensor (.float wx) (Index t) × Tensor (.float wy) (Index t')) : Prop :=
+  IsJointJvp₂₂OfOn jvp f Set.univ
 
 /-! ## JVP rules of ternary primitives -/
 
 /-- `jvpA`, `jvpB` and `jvpC` are correct JVP rules for the ternary `f`
 at every triple of finite arrays in `dom`, as `IsJvp₂OfOn` for three arguments:
 near `(a, b, c)`, `f` computes a real function `F`, which is differentiable at `(a, b, c)`,
-the rules return finite arrays of the output shape,
-and their sum is the derivative of `F` at `(a, b, c)` applied to the finite tangents.
+and each rule, applied to a finite tangent of its argument,
+returns the derivative of `F` at `(a, b, c)` applied to that tangent and zero tangents of the others.
+`standard_jvp` adds the results of the rules whose tangents are not symbolic zeros,
+so the sum is correct for every pattern of symbolic zeros if and only if each rule is.
 Each rule takes the tangent of its argument, then the three primals, as in `ad.defjvp`. -/
 def IsJvp₃OfOn {ra rb rc r ra' rb' rc' : ℕ} {sa : Shape ra} {sb : Shape rb} {sc : Shape rc}
     {t : Shape r} {ta : Shape ra'} {tb : Shape rb'} {tc : Shape rc'} {wa wb wc : FloatWidth}
@@ -156,11 +259,9 @@ def IsJvp₃OfOn {ra rb rc r ra' rb' rc' : ℕ} {sa : Shape ra} {sb : Shape rb} 
       (L : (Index sa → ℝ) × (Index sb → ℝ) × (Index sc → ℝ) →L[ℝ] Index t → ℝ),
     (∀ᶠ p in nhds (a, b, c), f (ofReal p.1) (ofReal p.2.1) (ofReal p.2.2) = ofReal (F p)) ∧
     HasFDerivAt F L (a, b, c) ∧
-    ∀ ga gb gc, ∃ da db dc : Index t → ℝ,
-      (jvpA (ofReal ga) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) da) ∧
-      (jvpB (ofReal gb) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) db) ∧
-      (jvpC (ofReal gc) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) dc) ∧
-      L (ga, gb, gc) = da + db + dc
+    (∀ ga, (jvpA (ofReal ga) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) (L (ga, 0, 0)))) ∧
+    (∀ gb, (jvpB (ofReal gb) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) (L (0, gb, 0)))) ∧
+    ∀ gc, (jvpC (ofReal gc) (ofReal a) (ofReal b) (ofReal c)).Same (ofReal (w := w) (L (0, 0, gc)))
 
 /-- `jvpA`, `jvpB` and `jvpC` are correct JVP rules for the ternary `f`
 at every triple of finite arrays. -/
@@ -175,6 +276,73 @@ def IsJvp₃Of {ra rb rc r ra' rb' rc' : ℕ} {sa : Shape ra} {sb : Shape rb} {s
     (f : Tensor (.float wa) (Index sa) → Tensor (.float wb) (Index sb) →
       Tensor (.float wc) (Index sc) → Tensor (.float w) (Index t)) : Prop :=
   IsJvp₃OfOn jvpA jvpB jvpC f Set.univ
+
+/-! ## JVP rules on symbolic zeros
+
+The rules of `ad.defjvp` and `ad.deflinear2` take arrays.
+These are the functions of `jax/_src/interpreters/ad.py` that pass them tangents
+that may be symbolic zeros, as `JVPTrace.process_primitive` does for a jaxpr.
+-/
+
+/-- `standard_jvp` for a unary primitive `f`, `jax/_src/interpreters/ad.py:978`:
+the rule is evaluated for an array tangent,
+and a symbolic zero tangent gives the symbolic zero of the output of `f`, `p2tz(val_out)`. -/
+def standardJvp₁ {s : Shape m} {t : Shape n} {t' : Shape n'}
+    (jvp : Tensor (.float w) (Index s) → Tensor (.float w) (Index s) → Tensor (.float w') (Index t'))
+    (_f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t))
+    (g : Tan (.float w) (Index s)) (x : Tensor (.float w) (Index s)) : Tan (.float w') (Index t') :=
+  match g with
+  | .zero _ => .zero (.of (.float w') t)
+  | .arr g => .arr (jvp g x)
+
+/-- `standard_jvp` for a binary primitive `f` whose two rules return arrays of the same type,
+`jax/_src/interpreters/ad.py:978`:
+the rule of each argument with an array tangent is evaluated,
+`add_tangents` adds the results with `add_jaxvals`, an elementwise `add`,
+and the sum of no results is the symbolic zero of the output of `f`, `p2tz(val_out)`.
+`jax/_src/interpreters/ad.py:996`:
+```
+def add_tangents(x, y):
+  if type(x) is Zero:
+    return y
+  elif type(y) is Zero:
+    return x
+  else:
+    return add_jaxvals(x, y)
+``` -/
+def standardJvp₂ {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape n'}
+    (jvpX : Tensor (.float wx) (Index sx) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t'))
+    (jvpY : Tensor (.float wy) (Index sy) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t'))
+    (_f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t))
+    (g : Tan (.float wx) (Index sx)) (h : Tan (.float wy) (Index sy))
+    (x : Tensor (.float wx) (Index sx)) (y : Tensor (.float wy) (Index sy)) : Tan (.float w) (Index t') :=
+  match g, h with
+  | .zero _, .zero _ => .zero (.of (.float w) t)
+  | .arr g, .zero _ => .arr (jvpX g x y)
+  | .zero _, .arr h => .arr (jvpY h x y)
+  | .arr g, .arr h => .arr (jvpX g x y + jvpY h x y)
+
+/-- `linear_jvp` of `ad.deflinear2` for a binary primitive `f`, which applies `f` to the tangents
+after `instantiate_zeros`, `jax/_src/interpreters/ad.py:942`:
+```
+def linear_jvp(primitive, primals, tangents, **params):
+  val_out = primitive.bind(*primals, **params)
+  if all(type(tangent) is Zero for tangent in tangents):
+    if primitive.multiple_results:
+      return val_out, map(p2tz, val_out)
+    return val_out, p2tz(val_out)
+  else:
+    tangents = map(instantiate_zeros, tangents)
+    return val_out, primitive.bind(*tangents, **params)
+``` -/
+def linearJvp₂ {sx : Shape m} {sy : Shape m'} {t : Shape n}
+    (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t))
+    (g : Tan (.float wx) (Index sx)) (h : Tan (.float wy) (Index sy)) : Tan (.float w) (Index t) :=
+  match g, h with
+  | .zero _, .zero _ => .zero (.of (.float w) t)
+  | g, h => .arr (f g.inst h.inst)
 
 /-! ## Zero JVP rules -/
 
@@ -223,6 +391,25 @@ def IsTransposeOf {s : Shape m} {s' : Shape m'} {t : Shape n}
     f (ofReal x) = ofReal y ∧ (tr (ofReal ct)).Same (ofReal (w := w) u) ∧
     ∑ j, ct j * y j = ∑ i, u i * x i
 
+/-- `tr` is a correct transpose rule for `f` that takes and returns symbolic zeros:
+for an array cotangent, it is a correct transpose rule as in `IsTransposeOf`,
+and for the symbolic zero cotangent of the output of `f`, it returns a zero cotangent of the input,
+an array of zeros or a symbolic zero of the aval of the input.
+
+`backward_pass` passes a symbolic zero to a rule of `ad.primitive_transposes`
+if no cotangent reaches the output of an equation, `ValAccum.freeze`, `jax/_src/interpreters/ad.py:452`,
+and `ct_check` raises if a cotangent does not have the shape of the input it is for.
+Rules registered with `ad.deflinear2` or `ad.fancy_transposes` never see a symbolic zero:
+`linear_transpose2`, `jax/_src/interpreters/ad.py:964`, returns symbolic zeros itself,
+and their rules are stated with `IsTransposeOf`. -/
+def IsTanTransposeOf {s : Shape m} {s' : Shape m'} {t : Shape n}
+    (tr : Tan (.float w') (Index t) → Tan d (Index s'))
+    (f : Tensor (.float w) (Index s) → Tensor (.float w') (Index t)) : Prop :=
+  (tr (.zero (.of (.float w') t))).Same (0 : Tensor (.float w) (Index s)) ∧
+  ∀ (ct : Index t → ℝ) (x : Index s → ℝ), ∃ (y : Index t → ℝ) (u : Index s → ℝ),
+    f (ofReal x) = ofReal y ∧ (tr (.arr (ofReal ct))).Same (ofReal (w := w) u) ∧
+    ∑ j, ct j * y j = ∑ i, u i * x i
+
 /-- `trX` and `trY` are correct transpose rules for the binary `f`, which is linear in both arguments
 together: on finite arrays, `f` returns a finite array, `trX` and `trY` return finite arrays
 of the shapes of the inputs, and pairing a cotangent `ct` with `f x y`
@@ -247,22 +434,28 @@ The rule returns one entry per argument, a cotangent or `None`, and `backward_pa
 the entries of the arguments that are not linear inputs (`write_cotangent`, `jax/_src/interpreters/ad.py:359`).
 The outer `none` is a raised exception.
 
+The cotangent and the cotangents that the rule returns may be symbolic zeros, as in `IsTanTransposeOf`.
+
 The rule is correct if there are correct transpose rules `trX` and `trY` of `f` such that,
-whenever some argument is a linear input, the rule does not raise
-and returns `trX ct` and `trY ct` for the arguments that are linear inputs. -/
+whenever some argument is a linear input, the rule does not raise,
+returns `trX ct` and `trY ct` for the arguments that are linear inputs if `ct` is an array,
+and zero cotangents of their avals if `ct` is the symbolic zero of the output of `f`. -/
 def IsPartialTranspose₂Of {sx : Shape m} {sy : Shape m'} {sx' : Shape k} {sy' : Shape k'}
     {t : Shape n}
-    (tr : Tensor (.float w) (Index t) → Option (Tensor (.float wx) (Index sx)) →
+    (tr : Tan (.float w) (Index t) → Option (Tensor (.float wx) (Index sx)) →
       Option (Tensor (.float wy) (Index sy)) →
-      Option (Option (Tensor d₁ (Index sx')) × Option (Tensor d₂ (Index sy'))))
+      Option (Option (Tan d₁ (Index sx')) × Option (Tan d₂ (Index sy'))))
     (f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)) :
     Prop :=
   ∃ (trX : Tensor (.float w) (Index t) → Tensor d₁ (Index sx'))
     (trY : Tensor (.float w) (Index t) → Tensor d₂ (Index sy')),
     IsTranspose₂Of trX trY f ∧
-    ∀ (ct : Index t → ℝ) x y, x = none ∨ y = none →
-      ∃ u v, tr (ofReal ct) x y = some (u, v) ∧
-        (x = none → u = some (trX (ofReal ct))) ∧ (y = none → v = some (trY (ofReal ct)))
+    ∀ x y, x = none ∨ y = none →
+      (∀ ct : Index t → ℝ, ∃ u v, tr (.arr (ofReal ct)) x y = some (u, v) ∧
+        (x = none → u = some (.arr (trX (ofReal ct)))) ∧ (y = none → v = some (.arr (trY (ofReal ct))))) ∧
+      ∃ u v, tr (.zero (.of (.float w) t)) x y = some (u, v) ∧
+        (x = none → ∃ a, u = some a ∧ a.Same (0 : Tensor (.float wx) (Index sx))) ∧
+        (y = none → ∃ b, v = some b ∧ b.Same (0 : Tensor (.float wy) (Index sy)))
 
 /-! ## Forwarding rules -/
 
@@ -381,6 +574,51 @@ theorem Tensor.Same.unique {s : Shape m} {t : Shape n} {a : Tensor d (Index s)}
   funext j
   let i : Index s := fun d => ⟨j d, by rw [hs d]; exact (j d).isLt⟩
   exact (hv i j fun _ => rfl).symm.trans (hv' i j fun _ => rfl)
+
+/-- The sum of two arrays of the same type that are finite arrays is their sum. -/
+theorem Tensor.Same.add {s : Shape m} {t : Shape n} {a b : Tensor (.float w) (Index s)}
+    {u v : Index t → ℝ} (ha : a.Same (ofReal (w := w) u)) (hb : b.Same (ofReal (w := w) v)) :
+    (a + b).Same (ofReal (w := w) (u + v)) := by
+  obtain ⟨hmn, hs, hva⟩ := ha.apply_eq
+  obtain ⟨_, -, hvb⟩ := hb.apply_eq
+  refine ⟨rfl, hmn, hs, fun i j hij => ?_⟩
+  show a i + b i = _
+  rw [hva i j hij, hvb i j hij]
+  rfl
+
+@[simp] theorem Tan.same_arr {s : Shape m} {t : Shape n} (x : Tensor d (Index s))
+    (b : Tensor (.float w) (Index t)) : (Tan.arr x).Same b ↔ x.Same b := Iff.rfl
+
+@[simp] theorem Tan.ofReal_true {s : Shape n} (g : Index s → ℝ) :
+    Tan.ofReal (w := w) true g = .zero (.of (.float w) s) := rfl
+
+@[simp] theorem Tan.ofReal_false {s : Shape n} (g : Index s → ℝ) :
+    Tan.ofReal (w := w) false g = .arr (Jax.ofReal g) := rfl
+
+/-- The symbolic zero of the output of `f` stands for the derivative applied to zero tangents. -/
+theorem Tan.same_zero_of_eq_zero {s : Shape m} {t : Shape n} {x : Index t → ℝ} (hx : x = 0) :
+    (Tan.zero (d := d) (ι := Index s) (.of (.float w) t)).Same (Jax.ofReal (w := w) x) :=
+  ⟨rfl, by subst hx; rfl⟩
+
+/-- `standard_jvp` of correct rules that return arrays of the same type is correct
+for every pattern of symbolic zero tangents. -/
+theorem IsJvp₂OfOn.standardJvp₂ {sx : Shape m} {sy : Shape m'} {t : Shape n} {t' : Shape n'}
+    {jvpX : Tensor (.float wx) (Index sx) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t')}
+    {jvpY : Tensor (.float wy) (Index sy) → Tensor (.float wx) (Index sx) →
+      Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t')}
+    {f : Tensor (.float wx) (Index sx) → Tensor (.float wy) (Index sy) → Tensor (.float w) (Index t)}
+    {dom : Set ((Index sx → ℝ) × (Index sy → ℝ))} (h : IsJvp₂OfOn jvpX jvpY f dom) :
+    IsJointJvp₂OfOn (standardJvp₂ jvpX jvpY f) f dom := by
+  intro x y hxy
+  obtain ⟨F, L, hF, hL, hX, hY⟩ := h x y hxy
+  refine ⟨F, L, hF, hL, fun zg zh g k _ => ?_⟩
+  cases zg <;> cases zh
+  · have hsum : L (g, k) = L (g, 0) + L (0, k) := by rw [← map_add]; simp
+    simpa [Jax.standardJvp₂, hsum] using (hX g).add (hY k)
+  · simpa [Jax.standardJvp₂] using hX g
+  · simpa [Jax.standardJvp₂] using hY k
+  · exact Tan.same_zero_of_eq_zero (by simp only [↓reduceIte, Prod.mk_zero_zero, map_zero])
 
 /-- Sums over the indices of two shapes with the same sizes agree
 if the summands agree at indices with the same values. -/

@@ -641,6 +641,31 @@ def reduce {s : Shape n} (computation : Computation w) (initValue : Scalar w) (d
   fun j => (List.ofFn (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) operand j)).foldl
     computation.op initValue
 
+/-- The `computation` of `lax.reduce` with two operands, of widths `wx` and `wy`,
+traced to the jaxpr `jaxpr` of `reduce_p`:
+it combines a pair of accumulators with a pair of entries, one of each operand. -/
+structure Computation₂ (wx wy : FloatWidth) where
+  /-- The function of two pairs of scalars that the jaxpr computes. -/
+  op : Scalar wx × Scalar wy → Scalar wx × Scalar wy → Scalar wx × Scalar wy
+  /-- The JVP `jvp a b da db` of `op` that `api.jvp` derives from the jaxpr. -/
+  jvp : Scalar wx × Scalar wy → Scalar wx × Scalar wy → Scalar wx × Scalar wy → Scalar wx × Scalar wy →
+    Scalar wx × Scalar wy
+
+/-- `lax.reduce` with two operands `x` and `y` of the same shape and two initial values,
+which reduces the pairs of their entries over `dimensions` with `computation.op`,
+in the left fold of `reduce`. The result is a pair of arrays that keep the other axes in order.
+`jax/_src/lax/lax.py:3260`; `out_sharding` is dropped.
+[StableHLO `reduce`](https://openxla.org/stablehlo/spec#reduce) with several inputs
+applies the body to the tuples of the entries of the inputs. -/
+def reduce₂ {wx wy : FloatWidth} {s : Shape n} (computation : Computation₂ wx wy)
+    (initValues : Scalar wx × Scalar wy) (dimensions : List (Fin n)) (_hd : dimensions.Nodup)
+    (x : Tensor (.float wx) (Index s)) (y : Tensor (.float wy) (Index s)) :
+    Tensor (.float wx) (Index (s ∘ keptAxes dimensions.toFinset)) ×
+      Tensor (.float wy) (Index (s ∘ keptAxes dimensions.toFinset)) :=
+  let r := fun j => (List.ofFn fun p => (reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) x j p,
+    reductionSlice (sortedAxes _) (fun _ => mem_sortedAxes) y j p)).foldl computation.op initValues
+  (fun j => (r j).1, fun j => (r j).2)
+
 /-! ## Gather and scatter
 
 An array of indices of shape `s` is an integer array `Tensor (.int wi) (Index s)`, with no tangent.

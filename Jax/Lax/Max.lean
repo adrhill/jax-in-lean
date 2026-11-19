@@ -94,7 +94,7 @@ theorem maxJvp_correct (h : Broadcastable sx sy) :
   refine ⟨fun p j => p.1 (ux j) ⊔ p.2 (uy j), ContinuousLinearMap.pi fun j =>
     cmp (x (ux j)) (y (uy j)) • (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _) +
     cmp (y (uy j)) (x (ux j)) • (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _),
-    ?_, ?_, ?_⟩
+    ?_, ?_, ?_, ?_⟩
   · exact .of_forall fun p => rfl
   · refine hasFDerivAt_pi.2 fun j => ?_
     have hne : x (ux j) ≠ y (uy j) := hxy j
@@ -117,8 +117,12 @@ theorem maxJvp_correct (h : Broadcastable sx sy) :
       have hd := hasFDerivAt_fst_apply (κ := Index sy) (ux j) (x, y)
       convert hd.congr_of_eventuallyEq hev using 1
       simp [cmp, hlt, hlt.not_gt, hlt.ne]
-  · intro g k
-    refine ⟨_, _, maxJvpLeft_same h g x y, maxJvpRight_same h k x y, ?_⟩
+  · intro g
+    convert maxJvpLeft_same h g x y using 2
+    ext j
+    simp [ux, uy, mul_comm]
+  · intro k
+    convert maxJvpRight_same h k x y using 2
     ext j
     simp [ux, uy, mul_comm]
 
@@ -128,16 +132,12 @@ The counterexample has shape `(1,)` and `x = y = 0`. -/
 theorem maxJvp_not_correct :
     ¬ IsJvp₂Of (maxJvpLeft (.refl ![1])) (maxJvpRight (.refl ![1])) (max (w := w) (.refl ![1])) := by
   intro hmax
-  obtain ⟨F, L, hF, hL, hrule⟩ := hmax 0 0 (Set.mem_univ _)
+  obtain ⟨F, L, hF, hL, hX, -⟩ := hmax 0 0 (Set.mem_univ _)
   let j₀ : Index (broadcastShape ![1] ![1]) := fun _ => ⟨0, by simp [broadcastShape]⟩
-  -- The value of the rules for the tangents `(1, 0)`.
-  obtain ⟨dx, dy, hdx, hdy, hsum⟩ := hrule 1 0
-  have hdx₀ : dx j₀ = 1 / 2 := by
-    rw [ofReal_injective (hdx.unique (maxJvpLeft_same _ 1 0 0))]
+  -- The value of the rule for `x` for the tangent `1`.
+  have hdx₀ : L (1, 0) j₀ = 1 / 2 := by
+    rw [ofReal_injective ((hX 1).unique (maxJvpLeft_same _ 1 0 0))]
     simp [cmp]
-  have hdy₀ : dy j₀ = 0 := by
-    rw [ofReal_injective (hdy.unique (maxJvpRight_same _ 0 0 0))]
-    simp
   -- `max` on finite arrays, and its restriction to the line `t ↦ (t, 0)`.
   let G : (Index ![1] → ℝ) × (Index ![1] → ℝ) → Index (broadcastShape ![1] ![1]) → ℝ :=
     fun p j => p.1 (j.unbroadcast (broadcastsTo_left _ _)) ⊔
@@ -149,9 +149,7 @@ theorem maxJvp_not_correct :
     simpa using (hasDerivAt_id (0 : ℝ)).smul_const v
   have hG' : HasFDerivAt G L ((0 : ℝ) • v) := by rw [zero_smul]; exact hG
   have hcomp := hasDerivAt_pi.1 (hG'.comp_hasDerivAt (0 : ℝ) hline) j₀
-  have hval : L v j₀ = 1 / 2 := by
-    rw [show L v = dx + dy from hsum]; simp [hdx₀, hdy₀]
-  rw [hval] at hcomp
+  rw [hdx₀] at hcomp
   -- On `t ≥ 0` the function is `t`, with derivative `1`.
   have hid : HasDerivWithinAt (fun t : ℝ => G (t • v) j₀) 1 (Set.Ici 0) 0 := by
     refine (hasDerivWithinAt_id (0 : ℝ) (Set.Ici 0)).congr (fun t ht => ?_) ?_

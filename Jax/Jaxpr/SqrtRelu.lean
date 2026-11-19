@@ -52,11 +52,14 @@ noncomputable def relu (x : Tensor (.float w) (Index s)) : Tensor (.float w) (In
 /-- The function of jax-ml/jax#6636, `sqrt(relu(x))`. -/
 noncomputable def sqrtRelu (x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index s) := sqrt (relu x)
 
-/-- Forward mode: the JVP rules of `gt`, `select_n` and `sqrt` applied in turn.
-`gt` has a zero tangent, and so does the constant case `0`. -/
+/-- Forward mode, `jax.jvp`: the JVP rules of `select_n` and `sqrt` applied in turn,
+and the tangent of the result instantiated.
+`gt` has a boolean result, whose tangent is a symbolic zero, so `select_n` has no tangent for `which`,
+and the constant case `0` has a symbolic zero tangent. -/
 noncomputable def sqrtReluJvp (g x : Tensor (.float w) (Index s)) : Tensor (.float w) (Index (broadcastShape s s)) :=
-  sqrtJvp (selectNJvp rfl (whichShape_broadcastShape s) (gt (.refl s) x 0) 0 g 0 x)
-    (sqrtRelu x) (relu x)
+  (standardJvp₁ (fun g c => sqrtJvp g (sqrt c) c) sqrt
+    (selectNJvp rfl (whichShape_broadcastShape s) (gt (.refl s) x 0) (.zero (.of (.float w) s)) (.arr g) 0 x)
+    (relu x)).inst
 
 /-- Reverse mode: the transpose rules of `mul`, for the tangent `mul(g, div(0.5, ans))` of `sqrt`,
 and of `select_n` applied in turn to the cotangent `ct`. -/
@@ -97,8 +100,8 @@ theorem sqrtReluJvp_of_neg (g : Index s → ℝ) {x : Index s → ℝ} (hx : ∀
   have h2 : Scalar.fin (w := w) 0 * .posInf = .nan := by
     show Scalar.infWithSign 0 = _
     simp [Scalar.infWithSign]
-  simp [sqrtReluJvp, sqrtJvp, selectNJvp, selectN, gt_of_neg hx, mul, binop, constDiv, sqrtRelu,
-    sqrt, relu_of_neg hx, ofReal, Scalar.zero_def, Scalar.sqrt_fin le_rfl, h1, h2]
+  simp [sqrtReluJvp, standardJvp₁, Tan.inst, sqrtJvp, selectNJvp, selectN, gt_of_neg hx, mul, binop,
+    constDiv, sqrt, relu_of_neg hx, ofReal, Scalar.zero_def, Scalar.sqrt_fin le_rfl, h1, h2]
 
 /-- Forward mode is wrong at every negative array, where the function is differentiable. -/
 theorem sqrtReluJvp_not_correct [Nonempty (Index s)] :

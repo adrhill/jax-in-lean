@@ -72,7 +72,7 @@ theorem divJvp_correct (h : Broadcastable sx sy) :
   refine ⟨fun p j => p.1 (ux j) / p.2 (uy j), ContinuousLinearMap.pi fun j =>
     x (ux j) • ((ContinuousLinearMap.toSpanSingleton ℝ (-(y (uy j) ^ 2)⁻¹)).comp
       (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _)) +
-    (y (uy j))⁻¹ • (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _), ?_, ?_, ?_⟩
+    (y (uy j))⁻¹ • (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _), ?_, ?_, ?_, ?_⟩
   · have hopen : IsOpen {p : (Index sx → ℝ) × (Index sy → ℝ) | ∀ j, p.2 (uy j) ≠ 0} := by
       simp only [Set.ofPred_forall]
       exact isOpen_iInter_of_finite fun j => isOpen_ne_fun (by fun_prop) continuous_const
@@ -86,18 +86,24 @@ theorem divJvp_correct (h : Broadcastable sx sy) :
     · funext p
       simp [div_eq_mul_inv]
     · rfl
-  · intro g k
-    refine ⟨fun j => g (ux j) / y (uy j), _, .of_eq (funext fun j => ?_),
-      divJvpRight_same h k x y hy, ?_⟩
-    · exact Scalar.fin_div_fin _ (hy j)
-    · funext j
-      simp only [ContinuousLinearMap.pi_apply, add_apply, smul_apply, ux, uy,
-        ContinuousLinearMap.comp_apply, ContinuousLinearMap.toSpanSingleton_apply,
-        ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_snd', ContinuousLinearMap.coe_fst',
-        smul_eq_mul, Pi.add_apply, zpow_neg]
-      have := hy j
-      field_simp
-      ring
+  · intro g
+    refine .of_eq (funext fun j => ?_)
+    refine (Scalar.fin_div_fin _ (hy j)).trans (congrArg Scalar.fin ?_)
+    simp only [ContinuousLinearMap.pi_apply, add_apply, smul_apply, ux, uy,
+      ContinuousLinearMap.comp_apply, ContinuousLinearMap.toSpanSingleton_apply,
+      ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_snd', ContinuousLinearMap.coe_fst',
+      smul_eq_mul, Pi.zero_apply]
+    ring
+  · intro k
+    convert divJvpRight_same h k x y hy using 2
+    funext j
+    simp only [ContinuousLinearMap.pi_apply, add_apply, smul_apply, ux, uy,
+      ContinuousLinearMap.comp_apply, ContinuousLinearMap.toSpanSingleton_apply,
+      ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_snd', ContinuousLinearMap.coe_fst',
+      smul_eq_mul, Pi.zero_apply, zpow_neg]
+    have := hy j
+    field_simp
+    ring
 
 /-! ## Transpose rule -/
 
@@ -110,6 +116,7 @@ theorem divTranspose_broadcastsTo (h : Broadcastable sx sy) :
 /-- The transpose rule of `div`, for its first argument.
 The undefined primal `x` is replaced by its shape `sx`, and `y` is not a linear input:
 the rule raises if `x` is not a linear input or `y` is one.
+The cotangent `None` of `y` is dropped.
 `jax/_src/lax/lax.py:5600`:
 ```
 def _div_transpose_rule(cotangent, x, y):
@@ -122,19 +129,21 @@ def _div_transpose_rule(cotangent, x, y):
     return [_unbroadcast(x.aval, div(cotangent, y)), None]
 ``` -/
 noncomputable def divTranspose (h : Broadcastable sx sy) (y : Tensor (.float w) (Index sy))
-    (cotangent : Tensor (.float w) (Index (broadcastShape sx sy))) : Tensor (.float w) (Index sx) :=
-  unbroadcast sx (divTranspose_broadcastsTo h) (div h.right.broadcastable.symm cotangent y)
+    (cotangent : Tan (.float w) (Index (broadcastShape sx sy))) : Tan (.float w) (Index sx) :=
+  match cotangent with
+  | .zero _ => .zero (.of (.float w) sx)
+  | .arr cotangent => .arr (unbroadcast sx (divTranspose_broadcastsTo h) (div h.right.broadcastable.symm cotangent y))
 
 /-- The transpose rule of `div` transposes `div` with a fixed divisor that has no zeros. -/
 theorem divTranspose_correct (h : Broadcastable sx sy) (y : Index sy → ℝ)
     (hy : ∀ j : Index (broadcastShape sx sy), y (j.unbroadcast h.right) ≠ 0) :
-    IsTransposeOf (divTranspose h (ofReal y)) (div (w := w) h · (ofReal y)) := by
-  intro ct x
+    IsTanTransposeOf (divTranspose h (ofReal y)) (div (w := w) h · (ofReal y)) := by
+  refine ⟨⟨rfl, rfl⟩, fun ct x => ?_⟩
   let ux : Index (broadcastShape sx sy) → Index sx := fun j => j.unbroadcast (broadcastsTo_left sx sy)
   let uy : Index (broadcastShape sx sy) → Index sy := fun j => j.unbroadcast h.right
   refine ⟨fun j => x (ux j) / y (uy j), fun i => ∑ j with ux j = i, ct j / y (uy j),
     funext fun j => Scalar.fin_div_fin _ (hy j), .of_eq (funext fun i => ?_), ?_⟩
-  · rw [divTranspose, unbroadcast_apply, ofReal, Scalar.fin_sum]
+  · rw [unbroadcast_apply, ofReal, Scalar.fin_sum]
     refine sum_filter_index_congr (fun d => ?_) _ _ (fun j j' hjj => ?_) fun j j' hjj => ?_
     · have := h d
       simp only [broadcastShape]

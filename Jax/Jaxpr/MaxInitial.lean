@@ -15,7 +15,8 @@ If a reduced axis of `x` has size 0, `b` is `-∞` everywhere and `c` is the con
 so the derivative is `0` (`maxInitial_hasZeroJvp`).
 Forward mode returns NaN instead (`maxInitialJvp_of_empty`):
 the JVP rule of `reduce_max` divides by the number of positions of the maximum, which is `0`
-(`Jax.Lax.reduceMaxJvp_of_isEmpty`), and the rule of `max` multiplies the NaN by `0`.
+(`Jax.Lax.reduceMaxJvp_of_isEmpty`), and the rule of `max` for `b` multiplies the NaN by `0`.
+The rule of `max` for `0.0` is not evaluated, because the constant has a symbolic zero tangent.
 Reverse mode is right, because the cotangent of an empty `x` has no entries.
 `bugs/reduce-max-jvp-empty-axis.json` has the reproducer, where the NaN reaches the Jacobian of a non-empty array.
 
@@ -40,13 +41,15 @@ theorem reduceMaxJvpShape_ofFn (s : Shape n) (axes : Finset (Fin n)) :
     List.ofFn (reduceMaxJvpShape s axes) = List.ofFn (s ∘ keptAxes axes) :=
   congrArg List.ofFn (funext (reduceMaxJvpShape_eq s axes))
 
-/-- Forward mode: the JVP rule of `reduce_max`, then the rule of `max` for its second argument.
-The constant `0.0` has a symbolic zero tangent, so the rule of `max` for its first argument is not evaluated.
+/-- Forward mode, `jax.jvp`: the JVP rule of `reduce_max`, then `standard_jvp` of `max`,
+and the tangent of the result instantiated.
+The constant `0.0` has a symbolic zero tangent.
 The tangent of `reduce_max` has the shape of `b` (`reduceMaxJvpShape_eq`) and is read as an array of that shape. -/
 noncomputable def maxInitialJvp (axes : Finset (Fin n)) (g x : Tensor (.float w) (Index s)) :=
-  maxJvpRight (.refl _)
-    (fun j => reduceMaxJvp axes g (reduceMax axes x) x (Index.castShape (reduceMaxJvpShape_ofFn s axes) j))
-    0 (reduceMax axes x)
+  (standardJvp₂ (maxJvpLeft (.refl _)) (maxJvpRight (.refl _)) (Lax.max (.refl _))
+    (.zero (.of (.float w) (s ∘ keptAxes axes)))
+    (.arr fun j => reduceMaxJvp axes g (reduceMax axes x) x (Index.castShape (reduceMaxJvpShape_ofFn s axes) j))
+    0 (reduceMax axes x)).inst
 
 /-- An axis of size 0 leaves no index. -/
 private theorem isEmpty_index (hs : ∃ d, s d = 0) : IsEmpty (Index s) := by
@@ -76,7 +79,7 @@ theorem maxInitial_hasZeroJvp (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) :
 theorem maxInitialJvp_of_empty (axes : Finset (Fin n)) (hs : ∃ d, s d = 0) (g x : Tensor (.float w) (Index s))
     (j : Index (broadcastShape (s ∘ keptAxes axes) (broadcastShape (s ∘ keptAxes axes) (s ∘ keptAxes axes)))) :
     maxInitialJvp axes g x j = .nan := by
-  simp only [maxInitialJvp, maxJvpRight, mul, binop, reduceMaxJvp_of_isEmpty axes hs]
+  simp only [maxInitialJvp, standardJvp₂, Tan.inst, maxJvpRight, mul, binop, reduceMaxJvp_of_isEmpty axes hs]
   rfl
 
 /-- Forward mode of `jnp.max(x, initial=0.)` is wrong wherever a reduced axis has size 0

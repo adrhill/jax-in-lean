@@ -84,6 +84,7 @@ theorem broadcastInDimTranspose_canonicalize {broadcastDimensions : Fin m → Fi
 /-- The transpose rule of `broadcast_in_dim`.
 It sums the cotangent over the axes that do not come from an operand axis of size other than 1,
 and inserts the axes of size 1 of the operand.
+For a symbolic zero cotangent, the cotangent of the operand is the symbolic zero of its aval.
 The undefined primal `operand` is replaced by its shape `so`.
 The proof `hd` is the check for duplicates in `_broadcast_in_dim_shape_rule`, `jax/_src/lax/lax.py:7485`.
 `jax/_src/lax/lax.py:7543`:
@@ -107,10 +108,14 @@ def _broadcast_in_dim_transpose_rule(ct, operand,
 ``` -/
 noncomputable def broadcastInDimTranspose (so : Shape m) (shape : Shape n)
     (broadcastDimensions : Fin m → Fin n) (hd : Function.Injective broadcastDimensions)
-    (ct : Tensor (.float w) (Index shape)) :=
-  expandDims (s := shape ∘ keptAxes (broadcastInDimTransposeAxes so broadcastDimensions))
-    ((unitDims so).map Fin.valEmbedding) (broadcastInDimTranspose_canonicalize hd)
-    (reduceSum (broadcastInDimTransposeAxes so broadcastDimensions) ct)
+    (ct : Tan (.float w) (Index shape)) :=
+  let tr := fun ct : Tensor (.float w) (Index shape) =>
+    expandDims (s := shape ∘ keptAxes (broadcastInDimTransposeAxes so broadcastDimensions))
+      ((unitDims so).map Fin.valEmbedding) (broadcastInDimTranspose_canonicalize hd)
+      (reduceSum (broadcastInDimTransposeAxes so broadcastDimensions) ct)
+  match ct with
+  | .arr ct => Tan.arr (tr ct)
+  | .zero _ => Tan.zero (.of (.float w) so)
 
 /-- For increasing `broadcast_dimensions`, `reduce_sum` keeps the axes `bdims` in their order. -/
 private theorem keptAxes_broadcastInDimTransposeAxes {broadcastDimensions : Fin m → Fin n}
@@ -138,9 +143,9 @@ private theorem unitDims_notMem {d : Fin m} : d ∉ unitDims so ↔ so d ≠ 1 :
 if `broadcast_dimensions` is strictly increasing. -/
 theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions : Fin m → Fin n)
     (h : BroadcastsTo so (shape ∘ broadcastDimensions)) (hd : StrictMono broadcastDimensions) :
-    IsTransposeOf (broadcastInDimTranspose so shape broadcastDimensions hd.injective)
+    IsTanTransposeOf (broadcastInDimTranspose so shape broadcastDimensions hd.injective)
       (broadcastInDim (d := .float w) shape broadcastDimensions h hd.injective) := by
-  intro ct x
+  refine ⟨⟨rfl, rfl⟩, fun ct x => ?_⟩
   have hAc := card_compl_broadcastInDimTransposeAxes (so := so) hd.injective
   have hN := broadcastInDimTranspose_rank (so := so) hd.injective
   have hk := card_compl_dimsSet (broadcastInDimTranspose_canonicalize (so := so) hd.injective)
@@ -167,7 +172,8 @@ theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions :
         hcast, hshape]
       rfl
   · -- The entries of the result sum the cotangent over the entries that are broadcast from `i`.
-    unfold broadcastInDimTranspose expandDims broadcastInDim
+    beta_reduce
+    unfold expandDims broadcastInDim
     generalize hq' : Index.unbroadcast _ (Index.proj _ q) = q'
     unfold reduceSum ofReal
     rw [← Scalar.fin_sum]
@@ -208,11 +214,11 @@ theorem broadcastInDimTranspose_correct (shape : Shape n) (broadcastDimensions :
 for an operand of shape `(3, 2)` and a result of shape `(2, 3)`,
 it returns a cotangent of shape `(2, 3)` instead of `(3, 2)`. -/
 theorem broadcastInDimTranspose_not_correct :
-    ¬ IsTransposeOf (broadcastInDimTranspose ![3, 2] ![2, 3] ![1, 0] (by decide))
+    ¬ IsTanTransposeOf (broadcastInDimTranspose ![3, 2] ![2, 3] ![1, 0] (by decide))
       (broadcastInDim (d := .float w) (so := ![3, 2]) ![2, 3] ![1, 0] (by unfold BroadcastsTo; decide)
         (by decide)) := by
   intro htr
-  obtain ⟨_, _, _, ⟨_, hN, hs, _⟩, _⟩ := htr 0 0
+  obtain ⟨_, _, _, ⟨_, hN, hs, _⟩, _⟩ := htr.2 0 0
   -- Axis 0 of the result of the rule has size 2, and axis 0 of the operand has size 3.
   have h0 := hs ⟨0, by decide⟩
   rw [show Fin.cast hN ⟨0, _⟩ = (0 : Fin 2) from rfl] at h0

@@ -1,0 +1,111 @@
+{
+  "$schema": "../scripts/bug.schema.json",
+  "title": "`jvp` and `grad` of `lax.reduce` with several operands raise if some operand is not differentiated",
+  "status": "proven",
+  "priority": "P2",
+  "primitive": "reduce",
+  "source": "jax/_src/lax/lax.py:9118",
+  "lean_refutation": "Jax.Lax.reduce₂Jvp_not_correct",
+  "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: lax.reduce multiple operands jvp",
+      "jax-ml/jax: lax.reduce grad Zero reshape",
+      "jax-ml/jax: _reduce_jvp",
+      "jax-ml/jax: reduce symbolic zero reshape",
+      "jax-ml/jax: variadic reduce gradient",
+      "jax-ml/jax: Error interpreting argument to reshape as a JAX value Zero",
+      "jax-ml/jax: lax.reduce jvp",
+      "jax-ml/jax: lax.reduce tuple grad",
+      "jax-ml/jax: variadic reduce",
+      "jax-ml/jax: reduce jvp Zero",
+      "jax-ml/jax: lax.reduce argmax index"
+    ],
+    "found": [
+      "https://github.com/jax-ml/jax/issues/32548 (open): the same failure in `reduce_window_jvp` of `lax.reduce_window` with several operands, one of them integer indices. Not `lax.reduce`.",
+      "https://github.com/jax-ml/jax/pull/39809 (open): fixes jax-ml/jax#32548 in `reduce_window_jvp` only, by skipping the operands with symbolic zero tangents.",
+      "https://github.com/jax-ml/jax/pull/7717 (merged 2021): makes `input_shape` integer-typed in `_reduce_jvp`. Unrelated."
+    ]
+  },
+  "maybe_intended": null,
+  "description": [
+    "`jax.jvp` and `jax.grad` of `lax.reduce` with several operands raise a `TypeError` if some operand has no tangent,",
+    "for example because it is closed over or because it is an integer array.",
+    "Forward mode works if every operand has a tangent.",
+    "So a reduction that tracks the indices of its maximum, with an integer operand, cannot be differentiated at all.",
+    "`jnp` reductions do not use `lax.reduce` with several operands."
+  ],
+  "expected": [
+    "An operand without a tangent has a zero tangent, so `jvp` should return what it returns with a zero tangent for that operand,",
+    "as `jvp` of `lax.reduce` with one operand and of every other primitive does.",
+    "For `x = [1, 2, 3]`, the product of `x` has the tangent `11` in the direction `[1, 1, 1]` and the gradient `[6, 3, 2]`."
+  ],
+  "reproducer": [
+    "import jax",
+    "import jax.numpy as jnp",
+    "from jax import lax",
+    "",
+    "",
+    "def prods(x, y):",
+    "    # The products of x and of y, in one reduction with two operands.",
+    "    return lax.reduce((x, y), (1.0, 1.0), lambda a, b: (a[0] * b[0], a[1] * b[1]), (0,))",
+    "",
+    "",
+    "x, y = jnp.array([1.0, 2.0, 3.0]), jnp.array([4.0, 5.0, 6.0])",
+    "",
+    "# Forward mode works if both operands have tangents.",
+    "print(jax.jvp(prods, (x, y), (jnp.ones(3), jnp.zeros(3)))[1])",
+    "# output: (Array(11., dtype=float32), Array(0., dtype=float32))",
+    "",
+    "# It raises if only x has a tangent, and so does reverse mode.",
+    "try:",
+    "    print(jax.jvp(lambda x: prods(x, y), (x,), (jnp.ones(3),))[1])",
+    "except TypeError as e:",
+    "    print(\"TypeError:\", str(e).splitlines()[0])",
+    "# desired: (Array(11., dtype=float32), Array(0., dtype=float32))",
+    "# actual:  TypeError: Error interpreting argument to reshape as a JAX value. The problematic value is of type <class 'jax._src.ad_util.Zero'> and was passed to reshape at position 0.",
+    "try:",
+    "    print(jax.grad(lambda x: prods(x, y)[0])(x))",
+    "except TypeError as e:",
+    "    print(\"TypeError:\", str(e).splitlines()[0])",
+    "# desired: [6. 3. 2.]",
+    "# actual:  TypeError: Error interpreting argument to reshape as a JAX value. The problematic value is of type <class 'jax._src.ad_util.Zero'> and was passed to reshape at position 0.",
+    "",
+    "# An integer operand never has a tangent, so a maximum that tracks its index cannot be differentiated.",
+    "def max_and_argmax(x):",
+    "    def pick(a, b):",
+    "        return lax.select(a[0] >= b[0], a[0], b[0]), lax.select(a[0] >= b[0], a[1], b[1])",
+    "    return lax.reduce((x, jnp.arange(3)), (-jnp.inf, 0), pick, (0,))",
+    "try:",
+    "    print(jax.grad(lambda x: max_and_argmax(x)[0])(x))",
+    "except TypeError as e:",
+    "    print(\"TypeError:\", str(e).splitlines()[0])",
+    "# desired: [0. 0. 1.]",
+    "# actual:  TypeError: Error interpreting argument to reshape as a JAX value. The problematic value is of type <class 'jax._src.ad_util.Zero'> and was passed to reshape at position 0."
+  ],
+  "cause": [
+    "`_reduce_jvp` reshapes every tangent that `_reduce_jvp_rule` passes on:",
+    "```",
+    "  primals = tuple(reshape(x, new_shape, permutation) for x in primals)",
+    "  tangents = tuple(reshape(t, new_shape, permutation) for t in tangents)",
+    "```",
+    "The tangent of an operand that is not differentiated is a symbolic `ad_util.Zero`, which `reshape` does not accept.",
+    "`JVPTrace.process_primitive` calls the rule as soon as one tangent is not a symbolic zero,",
+    "so the rule sees a symbolic zero whenever some operands are differentiated and others are not."
+  ],
+  "fix": [
+    "Instantiate the tangents in `_reduce_jvp_rule` with `ad.instantiate_zeros` before it calls `_reduce_jvp`."
+  ],
+  "lean": [
+    "`Jax.Lax.reduce₂` models `lax.reduce` with two floating-point operands, and `Jax.Lax.reduce₂Jvp` transcribes `_reduce_jvp_rule`,",
+    "taking each tangent as an array or a symbolic zero and raising if one is a symbolic zero.",
+    "`Jax.Lax.reduce₂Jvp_not_correct` shows that it is a correct JVP rule at no point, for any computation:",
+    "the correctness notion `IsJointJvp₂₂OfOn` requires a result for every pattern of symbolic zeros that `JVPTrace.process_primitive` passes on.",
+    "The integer operand of the last example is not modelled."
+  ],
+  "related": [
+    "reduce-jvp-noncommutative"
+  ],
+  "jax_version": "0.12.0.1"
+}

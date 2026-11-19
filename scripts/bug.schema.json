@@ -20,7 +20,7 @@
       "enum": ["P0", "P1", "P2", "P3"]
     },
     "primitive": {
-      "description": "The lax primitive, as named in lax.",
+      "description": "The lax primitive, as named in lax, or the public function outside lax, such as `jax.scipy.special.logsumexp`, if the bug is in its Python code and not in a rule of a primitive.",
       "type": "string"
     },
     "source": {

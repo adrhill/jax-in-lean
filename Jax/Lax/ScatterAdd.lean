@@ -38,7 +38,8 @@ variable {n ni nu : ℕ} {so : Shape n} {si : Shape ni} {su : Shape nu} {w : Flo
 /-! ## Rules -/
 
 /-- The JVP rule of `scatter_add`, which applies the primitive to the tangents.
-The tangents come first, then the primals. Symbolic zero tangents are not modelled.
+The tangents come first, then the primals.
+If both tangents are symbolic zeros, the result is the symbolic zero of the output.
 `jax/_src/lax/slicing.py:2847`:
 ```
 def _scatter_addsub_jvp(
@@ -62,16 +63,19 @@ def _scatter_addsub_jvp(
 ``` -/
 def scatterAddJvp (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
     (h : ScatterValid so si su dimensionNumbers)
-    (gOperand : Tensor (.float w) (Index so)) (gUpdates : Tensor (.float w) (Index su))
+    (gOperand : Tan (.float w) (Index so)) (gUpdates : Tan (.float w) (Index su))
     (_operand : Tensor (.float w) (Index so)) (indices : Tensor (.int wi) (Index si)) (_updates : Tensor (.float w) (Index su)) :
-    Tensor (.float w) (Index so) :=
-  scatterAdd dimensionNumbers mode h gOperand indices gUpdates
+    Tan (.float w) (Index so) :=
+  match gOperand, gUpdates with
+  | .zero _, .zero _ => .zero (.of (.float w) so)
+  | gOperand, gUpdates => .arr (scatterAdd dimensionNumbers mode h gOperand.inst indices gUpdates.inst)
 
 /-- The transpose rule of `scatter_add`.
 The cotangent of `operand` is the cotangent `t`,
 and the cotangent of `updates` gathers the windows of `t` with the fill value 0.
 An argument that is a linear input is `none`, as in `IsPartialTranspose₂Of`,
 and the result `none` is a raised exception: the `gather` raises if its checks fail.
+For a symbolic zero cotangent, the cotangent of a linear input is the symbolic zero of its aval.
 `jax/_src/lax/slicing.py:2871`:
 ```
 def _scatter_addsub_transpose_rule(
@@ -83,7 +87,8 @@ def _scatter_addsub_transpose_rule(
   else:
     updates_shape = updates.shape
   if type(t) is ad_util.Zero:
-    ...
+    operand_t = ad_util.Zero(operand.aval) if ad.is_undefined_primal(operand) else None
+    update_t = ad_util.Zero(updates.aval) if ad.is_undefined_primal(updates) else None
   else:
     operand_t = update_t = None
     if ad.is_undefined_primal(operand):
@@ -109,16 +114,20 @@ def _scatter_addsub_transpose_rule(
   return [operand_t, None, update_t]
 ``` -/
 def scatterAddTranspose (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (t : Tensor (.float w) (Index so)) (operand : Option (Tensor (.float w) (Index so))) (indices : Tensor (.int wi) (Index si))
+    (t : Tan (.float w) (Index so)) (operand : Option (Tensor (.float w) (Index so))) (indices : Tensor (.int wi) (Index si))
     (updates : Option (Tensor (.float w) (Index su))) :
-    Option (Option (Tensor (.float w) (Index so)) × Option (Tensor (.float w) (Index
+    Option (Option (Tan (.float w) (Index so)) × Option (Tan (.float w) (Index
       (gatherShape si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers))))) :=
-  let operandT := if operand.isNone then some t else none
+  match t with
+  | .zero _ => some (if operand.isNone then some (.zero (.of (.float w) so)) else none,
+      if updates.isNone then some (.zero (.of (.float w) su)) else none)
+  | .arr t =>
+  let operandT := if operand.isNone then some (.arr t) else none
   if updates.isNone then
     if h : GatherValid so si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers) ∧
         GatherLowers so si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers) then
-      some (operandT, some (gather dimensionNumbers.toGather
-        (scatterSliceSizes n su dimensionNumbers) mode 0 h.1 h.2 t indices))
+      some (operandT, some (.arr (gather dimensionNumbers.toGather
+        (scatterSliceSizes n su dimensionNumbers) mode 0 h.1 h.2 t indices)))
     else none
   else some (operandT, none)
 
@@ -273,9 +282,14 @@ theorem scatterAddJvp_correct (dn : ScatterDimensionNumbers) (mode : GatherScatt
       (fun x y => scatterAdd (w := w) dn mode h x indices y) := by
   intro x y _
   let L := LinearMap.toContinuousLinearMap (scatterAddReal (so := so) (su := su) dn mode indices)
-  exact ⟨scatterAddReal dn mode indices, L,
+  refine ⟨scatterAddReal dn mode indices, L,
     .of_forall fun p => scatterAdd_ofReal dn mode h indices p.1 p.2, L.hasFDerivAt,
-    fun g k => .of_eq (scatterAdd_ofReal dn mode h indices g k)⟩
+    fun zg zh g k hz => ?_⟩
+  cases zg <;> cases zh
+  · exact .of_eq (scatterAdd_ofReal dn mode h indices g k)
+  · exact .of_eq (scatterAdd_ofReal dn mode h indices g 0)
+  · exact .of_eq (scatterAdd_ofReal dn mode h indices 0 k)
+  · simp at hz
 
 /-- In the modes `CLIP` and `FILL_OR_DROP`, `scatter_add` is transposed by the identity for `operand`
 and by the `gather` of its windows with the fill value 0 for `updates`. -/
@@ -324,11 +338,12 @@ theorem scatterAddTranspose_correct (dn : ScatterDimensionNumbers) (mode : Gathe
     IsPartialTranspose₂Of (fun t x y => scatterAddTranspose dn mode t x indices y)
       (fun x y => scatterAdd (w := w) dn mode h x indices y) := by
   refine ⟨id, fun t => gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl t indices,
-    scatterAdd_isTranspose₂Of dn mode h hg hgl indices hm, fun ct x y hxy => ?_⟩
-  · refine ⟨if x.isNone then some (ofReal ct) else none,
-      if y.isNone then some (gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl
-        (ofReal ct) indices) else none, ?_, fun hx => by simp [hx], fun hy => by simp [hy]⟩
+    scatterAdd_isTranspose₂Of dn mode h hg hgl indices hm, fun x y hxy => ⟨fun ct => ?_, ?_⟩⟩
+  · refine ⟨if x.isNone then some (.arr (ofReal ct)) else none,
+      if y.isNone then some (.arr (gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl
+        (ofReal ct) indices)) else none, ?_, fun hx => by simp [hx], fun hy => by simp [hy]⟩
     cases y <;> simp [scatterAddTranspose, hg, hgl]
+  · exact ⟨_, _, rfl, fun hx => by simp [hx, Tan.Same], fun hy => by simp [hy, Tan.Same]⟩
 
 /-- The transpose rule of `scatter_add` raises for an operand of size 0 on an inserted axis:
 here the operand has shape `(0,)`, as in `jnp.zeros(0).at[jnp.array([0])].add(updates)`.
@@ -342,7 +357,7 @@ theorem scatterAddTranspose_not_correct (mode : GatherScatterMode)
       (fun x y => scatterAdd (w := w) (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode
         (by decide) x indices y) := by
   rintro ⟨_, _, _, hrule⟩
-  obtain ⟨_, _, hsome, _⟩ := hrule 0 (some 0) none (.inr rfl)
+  obtain ⟨_, _, hsome, _⟩ := (hrule (some 0) none (.inr rfl)).1 0
   have hno : ¬ (GatherValid ![0] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)
       (scatterSliceSizes 1 ![1] ⟨[], [0], [0], [], []⟩) ∧
       GatherLowers ![0] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)
@@ -374,13 +389,13 @@ theorem scatterAddTranspose_promiseInBounds_not_correct :
       (scatterSliceSizes 1 ![1] ⟨[], [0], [0], [], []⟩) ∧
       GatherLowers ![2] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)
         (scatterSliceSizes 1 ![1] ⟨[], [0], [0], [], []⟩) := by decide
-  obtain ⟨u, v, hsome, -, hv⟩ := hrule (fun _ => 1) (some 0) none (.inr rfl)
+  obtain ⟨u, v, hsome, -, hv⟩ := (hrule (some 0) none (.inr rfl)).1 fun _ => 1
   obtain ⟨z, a, b, hz, -, hb, hsum⟩ := htr (fun _ => 1) 0 (fun _ => 1)
   -- The rule returns the `gather` of the cotangent, which reads the cotangent 1 of the last entry.
   have hgather : (trY (ofReal fun _ => 1)).Same (ofReal (w := w) fun _ : Index ![1] => (1 : ℝ)) := by
     simp only [scatterAddTranspose, Option.isNone_none, ↓reduceIte, hyes, and_self, ↓reduceDIte,
       Option.some.injEq, Prod.mk.injEq] at hsome
-    have hrw := Option.some.inj ((hv rfl).symm.trans hsome.2.symm)
+    have hrw := Tan.arr.inj (Option.some.inj ((hv rfl).symm.trans hsome.2.symm))
     rw [hrw]
     refine ⟨rfl, rfl, by decide, fun i j _ => ?_⟩
     obtain ⟨k, hk⟩ := Option.isSome_iff_exists.1 (hread i)

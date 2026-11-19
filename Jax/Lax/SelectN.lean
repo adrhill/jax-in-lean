@@ -22,7 +22,8 @@ variable {n n' k : ℕ} {sw : Shape k} {s0 : Shape n} {s1 : Shape n'} {w : Float
 
 /-- The JVP rule of `select_n`, which selects the tangents of the cases.
 The tangents come first, then the cases. `which` has no tangent.
-Symbolic zero tangents are not modelled: `_select_jvp` replaces them by zeros.
+If one tangent is a symbolic zero, it is replaced by zeros of the shape of the other,
+which the shape check of `select_n` makes the shape of both cases.
 `jax/_src/lax/lax.py:8972`:
 ```
 def _select_jvp(primals, tangents):
@@ -38,34 +39,56 @@ def _select_jvp(primals, tangents):
   return out, out_dot
 ``` -/
 def selectNJvp (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape sw s0) (which : Tensor .bool (Index sw))
-    (caseDot0 : Tensor (.float w) (Index s0)) (caseDot1 : Tensor (.float w) (Index s1)) (_case0 : Tensor (.float w) (Index s0))
-    (_case1 : Tensor (.float w) (Index s1)) : Tensor (.float w) (Index s0) :=
-  selectN hc hw which caseDot0 caseDot1
+    (caseDot0 : Tan (.float w) (Index s0)) (caseDot1 : Tan (.float w) (Index s1)) (_case0 : Tensor (.float w) (Index s0))
+    (_case1 : Tensor (.float w) (Index s1)) : Tan (.float w) (Index s0) :=
+  match caseDot0, caseDot1 with
+  | .zero aval, .zero _ => .zero aval
+  | .zero _, .arr t1 => .arr (selectN hc hw which 0 t1)
+  | .arr t0, .zero _ => .arr (selectN hc hw which t0 0)
+  | .arr t0, .arr t1 => .arr (selectN hc hw which t0 t1)
 
-/-- The transpose rule of `select_n` for its first case: the cotangent where `which` is false.
+/-- The cotangent of the first case: the cotangent where `which` is false.
 `select(p, a, b)` is `select_n(p, b, a)`, and `zeros = full_like(ct, 0)` has the shape of `ct`.
+`jax/_src/lax/lax.py:8916`: `ct0 = select(which, zeros, ct) if ad.is_undefined_primal(cases[0]) else None` -/
+def selectNTranspose0 (hw : WhichShape sw s0) (which : Tensor .bool (Index sw)) (ct : Tensor (.float w) (Index s0)) :
+    Tensor (.float w) (Index s0) :=
+  selectN rfl hw which ct 0
+
+/-- The cotangent of the second case: the cotangent where `which` is true.
+`jax/_src/lax/lax.py:8917`: `ct1 = select(which, ct, zeros) if ad.is_undefined_primal(cases[1]) else None` -/
+def selectNTranspose1 (hw : WhichShape sw s0) (which : Tensor .bool (Index sw)) (ct : Tensor (.float w) (Index s0)) :
+    Tensor (.float w) (Index s0) :=
+  selectN rfl hw which 0 ct
+
+/-- The transpose rule of `select_n`, for a boolean `which` and two cases.
+A case that is a linear input is `none`, as in `IsPartialTranspose₂Of`, and so is its cotangent in the result
+if it is not one. The cotangent `None` of `which`, which is never a linear input, is dropped.
+For a symbolic zero cotangent, the cotangent of a case is the symbolic zero of the aval of the case.
 `jax/_src/lax/lax.py:8906`:
 ```
 def _select_transpose_rule(ct, which, *cases):
   assert not ad.is_undefined_primal(which)
   if type(ct) is ad_util.Zero:
-    ...
+    return [None] + [ad_util.Zero(c.aval) if ad.is_undefined_primal(c) else None
+                     for c in cases]
+  elif len(cases) == 1:
+    return (None, ct if ad.is_undefined_primal(cases[0]) else None)
   else:
     zeros = full_like(ct, 0)
     if dtypes.dtype(which) == np.dtype(np.bool_):
       ct0 = select(which, zeros, ct) if ad.is_undefined_primal(cases[0]) else None
       ct1 = select(which, ct, zeros) if ad.is_undefined_primal(cases[1]) else None
       return (None, ct0, ct1)
+    ...
 ``` -/
-def selectNTranspose0 (hw : WhichShape sw s0) (which : Tensor .bool (Index sw)) (ct : Tensor (.float w) (Index s0)) :
-    Tensor (.float w) (Index s0) :=
-  selectN rfl hw which ct 0
-
-/-- The transpose rule of `select_n` for its second case: the cotangent where `which` is true.
-`jax/_src/lax/lax.py:8917`: `ct1 = select(which, ct, zeros) if ad.is_undefined_primal(cases[1]) else None` -/
-def selectNTranspose1 (hw : WhichShape sw s0) (which : Tensor .bool (Index sw)) (ct : Tensor (.float w) (Index s0)) :
-    Tensor (.float w) (Index s0) :=
-  selectN rfl hw which 0 ct
+def selectNTranspose (hw : WhichShape sw s0) (which : Tensor .bool (Index sw)) (ct : Tan (.float w) (Index s0))
+    (case0 : Option (Tensor (.float w) (Index s0))) (case1 : Option (Tensor (.float w) (Index s1))) :
+    Option (Option (Tan (.float w) (Index s0)) × Option (Tan (.float w) (Index s0))) :=
+  match ct with
+  | .zero _ => some (if case0.isNone then some (.zero (.of (.float w) s0)) else none,
+      if case1.isNone then some (.zero (.of (.float w) s1)) else none)
+  | .arr ct => some (if case0.isNone then some (.arr (selectNTranspose0 hw which ct)) else none,
+      if case1.isNone then some (.arr (selectNTranspose1 hw which ct)) else none)
 
 /-! ## Proofs -/
 
@@ -91,11 +114,16 @@ theorem selectNJvp_correct (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape s
     IsJointJvp₂Of (selectNJvp hc hw which) (selectN (d := .float w) hc hw which) := by
   intro x y _
   let L := selectNReal hc hw which
-  exact ⟨L, L, .of_forall fun p => selectN_ofReal hc hw which p.1 p.2, L.hasFDerivAt,
-    fun g h => .of_eq (selectN_ofReal hc hw which g h)⟩
+  refine ⟨L, L, .of_forall fun p => selectN_ofReal hc hw which p.1 p.2, L.hasFDerivAt,
+    fun zg zh g k hz => ?_⟩
+  cases zg <;> cases zh
+  · exact .of_eq (selectN_ofReal hc hw which g k)
+  · exact .of_eq (selectN_ofReal hc hw which g 0)
+  · exact .of_eq (selectN_ofReal hc hw which 0 k)
+  · simp at hz
 
-/-- The transpose rules of `select_n` transpose `select_n` for a fixed `which`. -/
-theorem selectNTranspose_correct (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape sw s0)
+/-- The cotangents of the two cases transpose `select_n` for a fixed `which`. -/
+theorem selectN_isTranspose₂Of (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape sw s0)
     (which : Tensor .bool (Index sw)) :
     IsTranspose₂Of (selectNTranspose0 hw which) (selectNTranspose1 hw which)
       (selectN (d := .float w) hc hw which) := by
@@ -121,5 +149,14 @@ theorem selectNTranspose_correct (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichS
     simp only [Equiv.symm_apply_apply]
     simp only [selectNReal, ContinuousLinearMap.pi_apply, wh, he]
     split_ifs <;> simp
+
+/-- The transpose rule of `select_n` transposes `select_n` for a fixed `which`,
+whichever cases are linear inputs, also for a symbolic zero cotangent. -/
+theorem selectNTranspose_correct (hc : List.ofFn s1 = List.ofFn s0) (hw : WhichShape sw s0)
+    (which : Tensor .bool (Index sw)) :
+    IsPartialTranspose₂Of (selectNTranspose hw which) (selectN (d := .float w) hc hw which) := by
+  refine ⟨_, _, selectN_isTranspose₂Of hc hw which, fun x y _ => ⟨fun ct => ?_, ?_⟩⟩
+  · exact ⟨_, _, rfl, fun hx => by simp [hx], fun hy => by simp [hy]⟩
+  · exact ⟨_, _, rfl, fun hx => by simp [hx, Tan.Same], fun hy => by simp [hy, Tan.Same]⟩
 
 end Jax.Lax

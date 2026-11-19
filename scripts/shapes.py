@@ -15,6 +15,10 @@ The cases `dtypes` give the arguments of a primitive several dtypes, some of the
 JAX raises exactly when Lean rejects the model's primitive applied to arrays of these dtypes:
 the case is `#check` of the application if JAX traces it, and `#check_failure` if JAX raises.
 
+A rule that branches on symbolic zeros is also called for every pattern of `ad.Zero` arguments:
+the example states whether the model's rule raises, which results are symbolic zeros, and their avals,
+and a domain check that they are tangents of the primal result or cotangents of the inputs.
+
 A transpose rule with several linear inputs is also called for every choice of linear inputs,
 and a batching rule for every choice of batched arguments and batch axes:
 the example states whether the model's rule raises, and what it returns.
@@ -135,6 +139,11 @@ def generate_cases():
         if s:
             cases.append(("reduce", {"s": s, "dims": [0, 0]}))
             cases.append(("reduce", {"s": s, "dims": [len(s) - 1, 0, len(s) - 1]}))
+    # reduce with two operands: every subset of axes in every order, up to rank 2.
+    for s in all_shapes(2):
+        for k in range(len(s) + 1):
+            for axes in itertools.permutations(range(len(s)), k):
+                cases.append(("reduce2", {"s": s, "dims": list(axes)}))
     # broadcast_in_dim: every map `broadcast_dimensions` of rank at most 3,
     # all operand and result shapes up to rank 2, and a sample at rank 3.
     for n in range(4):
@@ -440,7 +449,39 @@ def jax_record(case):
         assert isinstance(jvp, functools.partial)
         return jvp.args[0]
 
+    def tan_result(t):
+        if t is None:
+            return None
+        if isinstance(t, ad.Zero):
+            return [True, list(t.aval.shape), dtype_name(t.aval.dtype)]
+        return [False, list(t.shape), dtype_name(t.dtype)]
+
+    def zero_pattern(rule, pat, tans, *ins):
+        """Trace `rule(*tangents, *ins)`, where tangent `k` is a symbolic zero of the aval `tans[k]`
+        if `pat[k]` is `z`, and a traced array of it if it is `a`.
+        `rule` returns a list of results. Returns `None` if it raises,
+        and otherwise the results as `zero_spec` describes them."""
+        got = []
+
+        def fn(*args):
+            it = iter(args)
+            ts = [
+                next(it) if c == "a" else ad.Zero(core.ShapedArray(t.shape, t.dtype))
+                for c, t in zip(pat, tans)
+            ]
+            outs = rule(*ts, *it)
+            got.append([tan_result(o) for o in outs])
+            return [o for o in outs if o is not None and not isinstance(o, ad.Zero)]
+
+        res = trace(fn, *(sds(t) for c, t in zip(pat, tans) if c == "a"), *ins)
+        return None if "error" in res else got[0]
+
+    def arg(c, x, s):
+        """An undefined primal for a linear input, marked `1`, and the array `x` otherwise."""
+        return undefined(s) if c == "1" else x
+
     rec = {}
+    zeros = rec["zero"] = {}
 
     def unary(f, primitive, s, ans=False, **kw):
         rec["primal"] = trace(lambda x: f(x, **kw), s)
@@ -505,6 +546,9 @@ def jax_record(case):
             tr = ad.primitive_transposes[L.convert_element_type_p]
             out = jax.ShapeDtypeStruct(tuple(s), to)
             rec["transpose"] = trace(lambda ct: tr(ct, undefined(s), **params)[0], out)
+            zeros["transpose z"] = zero_pattern(
+                lambda ct: tr(ct, undefined(s), **params)[:1], "z", [out]
+            )
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(conv, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(conv, x)[1](ct), s, out)
     elif prim == "pow_int":
@@ -561,6 +605,9 @@ def jax_record(case):
                 rec["transpose"] = trace(
                     lambda ct, y: tr(ct, undefined(sx), y, **params)[0], out, sy
                 )
+                zeros["transpose z"] = zero_pattern(
+                    lambda ct, y: tr(ct, undefined(sx), y, **params)[:1], "z", [sds(out)], sy
+                )
             rec["user_jvp"] = trace(
                 lambda x, y, tx, ty: jax.jvp(op, (x, y), (tx, ty))[1], sx, sy, sx, sy
             )
@@ -590,6 +637,27 @@ def jax_record(case):
             rec["transpose1"] = trace(
                 lambda ct, w: tr(ct, w, undefined(s0), undefined(s1))[2], out, sw
             )
+            for pat in ("za", "az", "zz"):
+                zeros[f"jvp {pat}"] = zero_pattern(
+                    lambda ga, gb, w, a, b: [jvp((w, a, b), (None, ga, gb))[1]],
+                    pat,
+                    [sds(s0), sds(s1)],
+                    sw,
+                    s0,
+                    s1,
+                )
+            for ct_pat in "za":
+                for lin in linear_choices(2):
+                    zeros[f"transpose {ct_pat} {lin}"] = zero_pattern(
+                        lambda ct, w, a, b, lin=lin: tr(
+                            ct, w, arg(lin[0], a, s0), arg(lin[1], b, s1)
+                        )[1:],
+                        ct_pat,
+                        [sds(out)],
+                        sw,
+                        s0,
+                        s1,
+                    )
             rec["user_jvp"] = trace(
                 lambda w, a, b, ta, tb: jax.jvp(
                     lambda a, b: lax.select_n(w, a, b), (a, b), (ta, tb)
@@ -688,6 +756,10 @@ def jax_record(case):
             tr = ad.primitive_transposes[primitive]
             rec["jvp"] = trace(lambda g, x: jvp((x,), (g,), **params)[1], s, s)
             rec["transpose"] = trace(lambda ct: tr(ct, undefined(s), **params)[0], out)
+            if prim == "broadcast_in_dim":
+                zeros["transpose z"] = zero_pattern(
+                    lambda ct: tr(ct, undefined(s), **params)[:1], "z", [sds(out)]
+                )
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
     elif prim == "reduce_max":
@@ -717,6 +789,31 @@ def jax_record(case):
             )
             rec["user_jvp"] = trace(lambda x, t: jax.jvp(f, (x,), (t,))[1], s, s)
             rec["user_vjp"] = trace(lambda x, ct: jax.vjp(f, x)[1](ct), s, out)
+    elif prim == "reduce2":
+        s = p["s"]
+        one = np.array(1.0, DT)
+
+        def reduce2(x, y):
+            # The products of `x` and of `y`, in one reduction with two operands.
+            return lax.reduce(
+                (x, y), (one, one), lambda a, b: (a[0] * b[0], a[1] * b[1]), p["dims"]
+            )
+
+        rec["primal"] = trace(lambda x, y: reduce2(x, y)[0], s, s)
+        if "error" not in rec["primal"]:
+            params = params_of(reduce2, L.reduce_p, s, s)
+            jvp = ad.primitive_jvps[L.reduce_p]
+            init_dot = ad.Zero(core.ShapedArray((), DT))
+            for pat in ("aa", "za", "az", "zz"):
+                zeros[f"jvp {pat}"] = zero_pattern(
+                    lambda gx, gy, x, y: list(
+                        jvp((x, y, one, one), (gx, gy, init_dot, init_dot), **params)[1]
+                    ),
+                    pat,
+                    [sds(s), sds(s)],
+                    s,
+                    s,
+                )
     elif prim == "pad":
         s, sv, config = p["s"], p["sv"], [tuple(c) for c in p["config"]]
         f = lambda x, v: lax.pad(x, v, config)
@@ -736,6 +833,24 @@ def jax_record(case):
             rec["transpose_padding_value"] = trace(
                 lambda ct: tr(ct, undefined(s), undefined(sv), **params)[1], out
             )
+            for pat in ("za", "az", "zz"):
+                zeros[f"jvp {pat}"] = zero_pattern(
+                    lambda gx, gv, x, v: [jvp((x, v), (gx, gv), **params)[1]],
+                    pat,
+                    [sds(s), sds(sv)],
+                    s,
+                    sv,
+                )
+            for lin in linear_choices(2):
+                zeros[f"transpose z {lin}"] = zero_pattern(
+                    lambda ct, x, v, lin=lin: tr(
+                        ct, arg(lin[0], x, s), arg(lin[1], v, sv), **params
+                    ),
+                    "z",
+                    [sds(out)],
+                    s,
+                    sv,
+                )
             # The transpose rule for every choice of linear inputs: "1" marks a linear input.
             partial_cts: dict[str, list[bool] | None] = {}
             rec["partial"] = partial_cts
@@ -906,6 +1021,30 @@ def jax_record(case):
                 ints,
                 su,
             )
+            for pat in ("za", "az", "zz"):
+                zeros[f"jvp {pat}"] = zero_pattern(
+                    lambda gx, gu, x, i, u: [jvp((x, i, u), (gx, None, gu), **params)[1]],
+                    pat,
+                    [sds(so), sds(su)],
+                    so,
+                    ints,
+                    su,
+                )
+            for lin in linear_choices(2):
+                zeros[f"transpose z {lin}"] = zero_pattern(
+                    lambda ct, x, i, u, lin=lin: [
+                        c
+                        for k, c in enumerate(
+                            tr(ct, arg(lin[0], x, so), i, arg(lin[1], u, su), **params)
+                        )
+                        if k != 1
+                    ],
+                    "z",
+                    [sds(so)],
+                    so,
+                    ints,
+                    su,
+                )
             # The transpose rule for every choice of linear inputs: "1" marks a linear input.
             # The result lists whether `operand` gets a cotangent, and the shape of the cotangent of `updates`.
             partial_cts: dict[str, list | None] = {}
@@ -1022,6 +1161,20 @@ LDT = {
 }
 
 
+# A tangent or cotangent that is an array of zeros, the argument of a rule that takes `Tan`.
+LA = "(.arr 0)"
+
+
+def lz(s, dt):
+    """A symbolic zero of shape `s`, a list or a Lean shape, and dtype `dt`."""
+    return f"(.zero (Aval.of ({LDT[dt]}) {s if isinstance(s, str) else lshape(s)}))"
+
+
+def ltan(c, s, dt):
+    """A symbolic zero for `z`, and an array for `a`."""
+    return lz(s, dt) if c == "z" else LA
+
+
 def ltype(s, dt):
     """The Lean value of `typeOf` for an array of shape `s` and dtype `dt`."""
     return f"({llist(s)}, {LDT[dt]})"
@@ -1065,7 +1218,7 @@ def lean_spec(prim, p):
         vjp = []
         if p["to"] != p["dt"]:
             terms["jvp"] = f"convertFloatJvp (s := {S}) {W} {TO} 0 0 0"
-            terms["transpose"] = f"convertFloatTranspose (s := {S}) {W} {TO} 0"
+            terms["transpose"] = f"convertFloatTranspose (s := {S}) {W} {TO} {LA}"
             vjp = [("jvp", "primal"), ("transpose", p["s"])]
         return [], terms, vjp
     if prim == "pow_int":
@@ -1091,7 +1244,7 @@ def lean_spec(prim, p):
             terms["transpose_right"] = f"mulTransposeRight {imp} 0 0"
             vjp += [("transpose_left", p["sx"]), ("transpose_right", p["sy"])]
         if prim == "div":
-            terms["transpose"] = f"divTranspose {imp} 0 0"
+            terms["transpose"] = f"divTranspose {imp} 0 {LA}"
             vjp += [("transpose", p["sx"])]
         return [(f"Broadcastable {SX} {SY}", ("Broadcastable",))], terms, vjp
     if prim in COMPARE:
@@ -1105,7 +1258,7 @@ def lean_spec(prim, p):
         tr = f"(sw := {SW}) (s0 := {S0}) {W} PROOF1 {which} 0"
         terms = {
             "primal": f"selectN {D} {imp} 0 0",
-            "jvp": f"selectNJvp {W} {imp} 0 0 0 0",
+            "jvp": f"selectNJvp {W} {imp} {LA} {LA} 0 0",
             "transpose0": f"selectNTranspose0 {tr}",
             "transpose1": f"selectNTranspose1 {tr}",
         }
@@ -1187,6 +1340,11 @@ def lean_spec(prim, p):
             "jvp": f"reduceJvp (s := {S}) {W} lastNotOne 1 {DIMS} PROOF0 0 0",
         }
         return [(f"List.Nodup {DIMS}", ())], terms, [("jvp", "primal")]
+    if prim == "reduce2":
+        n = len(p["s"])
+        S, DIMS = lshape(p["s"]), f"([{', '.join(map(str, p['dims']))}] : List (Fin {n}))"
+        primal = f"(reduce₂ (s := {S}) (firstPair .{LDT[p['dt']].split('.')[-1]}) (0, 0) {DIMS} PROOF0 0 0).1"
+        return [(f"List.Nodup {DIMS}", ())], {"primal": primal}, []
     if prim == "broadcast_in_dim":
         n = len(p["shape"])
         SO, SH = lshape(p["so"]), lshape(p["shape"])
@@ -1195,7 +1353,7 @@ def lean_spec(prim, p):
         terms = {
             "primal": primal,
             "jvp": f"broadcastInDimJvp (so := {SO}) {W} {SH} {BD} PROOF0 PROOF1 0 0",
-            "transpose": f"broadcastInDimTranspose {W} {SO} {SH} {BD} PROOF1 0",
+            "transpose": f"broadcastInDimTranspose {W} {SO} {SH} {BD} PROOF1 {LA}",
         }
         args = [
             (f"BroadcastsTo {SO} ({SH} ∘ {BD})", ("BroadcastsTo",)),
@@ -1212,7 +1370,7 @@ def lean_spec(prim, p):
         imp = f"{lo} {hi} {interior} PROOF0"
         terms = {
             "primal": f"Lax.pad (s := {S}) (sv := {lshape(p['sv'])}) {D} {imp} 0 0",
-            "jvp": f"padJvp (s := {S}) (sv := {lshape(p['sv'])}) {W} {imp} 0 0 0 0",
+            "jvp": f"padJvp (s := {S}) (sv := {lshape(p['sv'])}) {W} {imp} {LA} {LA} 0 0",
             "transpose_operand": f"padTransposeOperand {W} {S} {imp} 0",
             "transpose_padding_value": f"padTransposePaddingValue {W} {S} {imp} 0",
         }
@@ -1287,10 +1445,120 @@ def lean_spec(prim, p):
         zero = "(fun _ => 0)"
         terms = {
             "primal": f"{name} {imp} 0 {zero} 0",
-            "jvp": f"{name}Jvp {imp} 0 0 0 {zero} 0",
+            "jvp": f"{name}Jvp {imp} {LA} {LA} 0 {zero} 0",
         }
         return [(f"ScatterValid {SO} {SI} {SU} {DN}", ())], terms, [("jvp", "primal")]
     raise ValueError(prim)
+
+
+def zero_spec(prim, p):
+    """The rules with branches for symbolic zeros, for every pattern of symbolic zero arguments.
+
+    Returns a dict from the names of the patterns to `(term, wants)`.
+    A name is `jvp` and a letter per tangent, or `transpose`, a letter for the cotangent
+    and the choice of linear inputs as in `linear_choices`: `z` is a symbolic zero and `a` an array.
+    `term` is a Lean term of type `Option (List (Option (Bool × List ℕ × DType)))`:
+    `none` if the rule raises, and otherwise for each result `none` if there is none,
+    and whether it is a symbolic zero, with its shape and dtype.
+    `wants` lists for each result the shape and dtype that it must have, or `None` if there is none;
+    `PRIMAL` stands for the primal result.
+    The terms contain `PROOF i` for the proof of argument `i` of `lean_spec`.
+    """
+    dt = p["dt"]
+    W = f"(w := .{LDT[dt].split('.')[-1]})"
+    TP = "tangentOf (typeOf (PRIMAL))"
+
+    def one(t):
+        return f"some [some (tanOf ({t}))]"
+
+    def pair(t):
+        return f"({t}).map (fun r => [r.1.map tanOf, r.2.map tanOf])"
+
+    def lin_wants(lin, ins):
+        return [ltype(s, dt) if c == "1" else None for c, s in zip(lin, ins)]
+
+    def opt(c):
+        return "none" if c == "1" else "(some 0)"
+
+    out = {}
+    if prim == "convert_element_type" and p["to"] != dt:
+        S, TO = lshape(p["s"]), f"(w' := .{LDT[p['to']].split('.')[-1]})"
+        t = f"convertFloatTranspose (s := {S}) {W} {TO} {lz(p['s'], p['to'])}"
+        out["transpose z"] = (one(t), [ltype(p["s"], dt)])
+    elif prim == "div":
+        SX, SY = lshape(p["sx"]), lshape(p["sy"])
+        imp = f"(sx := {SX}) (sy := {SY}) {W} PROOF0"
+        t = f"divTranspose {imp} 0 {lz(f'(broadcastShape {SX} {SY})', dt)}"
+        out["transpose z"] = (one(t), [ltype(p["sx"], dt)])
+    elif prim == "broadcast_in_dim":
+        n = len(p["shape"])
+        SO, SH = lshape(p["so"]), lshape(p["shape"])
+        BD = f"(dims {n} [{', '.join(map(str, p['bd']))}])"
+        t = f"broadcastInDimTranspose {W} {SO} {SH} {BD} PROOF1 {lz(p['shape'], dt)}"
+        out["transpose z"] = (one(t), [ltype(p["so"], dt)])
+    elif prim == "select_n":
+        SW, S0, S1 = lshape(p["sw"]), lshape(p["s0"]), lshape(p["s1"])
+        which = f"(fun _ => true : Tensor .bool (Index {SW}))"
+        imp = f"(sw := {SW}) (s0 := {S0}) (s1 := {S1}) PROOF0 PROOF1 {which}"
+        for pat in ("za", "az", "zz"):
+            t0, t1 = ltan(pat[0], p["s0"], dt), ltan(pat[1], p["s1"], dt)
+            out[f"jvp {pat}"] = (one(f"selectNJvp {W} {imp} {t0} {t1} 0 0"), [TP])
+        for ct in "za":
+            for lin in linear_choices(2):
+                t = (
+                    f"selectNTranspose (sw := {SW}) (s0 := {S0}) (s1 := {S1}) {W} PROOF1 {which} "
+                    f"{ltan(ct, p['s0'], dt)} {opt(lin[0])} {opt(lin[1])}"
+                )
+                out[f"transpose {ct} {lin}"] = (pair(t), lin_wants(lin, [p["s0"], p["s1"]]))
+    elif prim == "pad":
+        n = len(p["s"])
+        S, SV = lshape(p["s"]), lshape(p["sv"])
+        lo, hi, interior = (
+            f"(![{', '.join(str(c[i]) for c in p['config'])}] : Fin {n} → {ty})"
+            for i, ty in enumerate("ℤℤℕ")
+        )
+        imp = f"{lo} {hi} {interior} PROOF0"
+        for pat in ("za", "az", "zz"):
+            t0, t1 = ltan(pat[0], p["s"], dt), ltan(pat[1], p["sv"], dt)
+            t = f"padJvp (s := {S}) (sv := {SV}) {W} {imp} {t0} {t1} 0 0"
+            out[f"jvp {pat}"] = (one(t), [TP])
+        ct = lz(f"(padShape {S} {lo} {hi} {interior})", dt)
+        for lin in linear_choices(2):
+            t = pad_transpose(p, lin, ct)
+            out[f"transpose z {lin}"] = (pair(t), lin_wants(lin, [p["s"], p["sv"]]))
+    elif prim in SCATTER:
+        name = SCATTER[prim]
+        SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
+        imp = f"(so := {SO}) (si := {SI}) (su := {SU}) {W} (wi := .{LDT[p['it']].split('.')[-1]}) "
+        imp += f"{DN} {LMODE[p['mode']]} PROOF0"
+        for pat in ("za", "az", "zz"):
+            t0, t1 = ltan(pat[0], p["so"], dt), ltan(pat[1], p["su"], dt)
+            out[f"jvp {pat}"] = (one(f"{name}Jvp {imp} {t0} {t1} 0 (fun _ => 0) 0"), [TP])
+        for lin in linear_choices(2):
+            t = scatter_transpose(name, p, lin, lz(p["so"], dt))
+            out[f"transpose z {lin}"] = (pair(t), lin_wants(lin, [p["so"], p["su"]]))
+    elif prim == "reduce2":
+        n = len(p["s"])
+        S, DIMS = lshape(p["s"]), f"([{', '.join(map(str, p['dims']))}] : List (Fin {n}))"
+        for pat in ("aa", "za", "az", "zz"):
+            t0, t1 = ltan(pat[0], p["s"], dt), ltan(pat[1], p["s"], dt)
+            t = (
+                f"(reduce₂Jvp (s := {S}) (firstPair .{LDT[dt].split('.')[-1]}) (0, 0) {DIMS} PROOF0 "
+                f"{t0} {t1} 0 0).map (fun r => [some (tanOf r.1), some (tanOf r.2)])"
+            )
+            out[f"jvp {pat}"] = (t, [TP, TP])
+    return out
+
+
+def zero_want(res):
+    """The Lean value of a result of `zero_spec` that JAX returned."""
+    if res is None:
+        return "none"
+    entries = (
+        "none" if r is None else f"some ({str(r[0]).lower()}, {llist(r[1])}, {LDT[r[2]]})"
+        for r in res
+    )
+    return f"some [{', '.join(entries)}]"
 
 
 # The scatter primitives with the rules of `scatter_add`, and their names in the model.
@@ -1346,7 +1614,7 @@ FWD = {
 }
 
 
-def pad_transpose(p, lin):
+def pad_transpose(p, lin, ct=None):
     n = len(p["s"])
     lo, hi, interior = (
         f"(![{', '.join(str(c[i]) for c in p['config'])}] : Fin {n} → {ty})"
@@ -1354,7 +1622,8 @@ def pad_transpose(p, lin):
     )
     x, v = ("none" if c == "1" else "(some 0)" for c in lin)
     return (
-        f"padTranspose (sv := {lshape(p['sv'])}) {lwidths(p)} {lshape(p['s'])} {lo} {hi} {interior} PROOF0 0 "
+        f"padTranspose (sv := {lshape(p['sv'])}) {lwidths(p)} {lshape(p['s'])} {lo} {hi} {interior} PROOF0 "
+        f"{ct or LA} "
         f"{x} {v}"
     )
 
@@ -1365,11 +1634,12 @@ def pad_partial(p, lin):
 
 # Transpose rules for every choice of linear inputs: the Lean term that is `none` if the rule raises,
 # and otherwise lists which arguments get a cotangent.
-def scatter_transpose(name, p, lin):
+def scatter_transpose(name, p, lin, ct=None):
     SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
     x, u = ("none" if c == "1" else "(some 0)" for c in lin)
     return (
-        f"{name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {lwidths(p)} {DN} {LMODE[p['mode']]} 0 "
+        f"{name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {lwidths(p)} {DN} {LMODE[p['mode']]} "
+        f"{ct or LA} "
         f"{x} (fun _ => 0) {u}"
     )
 
@@ -1672,6 +1942,18 @@ def domain_assertions(prim, p, args, terms, vjp):
                 f"= some ({cts})"
             )
             out.append((f"domain partial {lin}", prop, "decide"))
+    for key, (term, wants) in zero_spec(prim, p).items():
+        # `JVPTrace.process_primitive` calls a JVP rule if some tangent is not a symbolic zero,
+        # and the rule must accept it then.
+        called = key.startswith("jvp") and "a" in key.split()[1]
+        ws = ", ".join(
+            "none" if w is None else f"some ({w.replace('PRIMAL', primal)})" for w in wants
+        )
+        prop = (
+            f"({fill(term, args)}).{'any' if called else 'all'} "
+            f"(fun l => l.map (·.map fun r => r.2) == [{ws}]) = true"
+        )
+        out.append((f"domain zero {key}", prop, "decide"))
     return out
 
 
@@ -1725,6 +2007,9 @@ def assertions(prim, p, rec):
     if "fwd" in rec:
         forwarded = "true" if rec["fwd"]["forwarded"] else "false"
         out.append(("fwd", f"{FWD[prim](p)} = {forwarded}", "decide"))
+    for key, (term, _) in zero_spec(prim, p).items():
+        # The results of the rule on symbolic zeros, and whether it raises.
+        out.append((f"zero {key}", f"{fill(term, args)} = {zero_want(rec['zero'][key])}", "decide"))
     for lin, cts in rec.get("partial", {}).items():
         want = partial_want(prim, cts)
         out.append((f"partial {lin}", f"{fill(PARTIAL[prim](p, lin), args)} = {want}", "decide"))
@@ -1784,9 +2069,26 @@ open Jax Jax.Lax
 
 set_option linter.all false
 
+/-- The shape and the dtype of an array or of a tangent. -/
+class TypeOf (α : Type) where
+  typeOf : α → List ℕ × DType
+
+export TypeOf (typeOf)
+
 /-- The shape and the dtype in the type of an array. -/
-def typeOf {n : ℕ} {s : Shape n} {d : DType} (_ : Tensor d (Index s)) : List ℕ × DType :=
-  (List.ofFn s, d)
+instance {n : ℕ} {s : Shape n} {d : DType} : TypeOf (Tensor d (Index s)) := ⟨fun _ => (List.ofFn s, d)⟩
+
+/-- Whether a tangent is a symbolic zero, and its shape and dtype:
+the aval of a symbolic zero, and the type of an array. -/
+def tanOf {n : ℕ} {s : Shape n} {d : DType} : Tan d (Index s) → Bool × List ℕ × DType
+  | .zero aval => (true, aval.shape, aval.dtype)
+  | .arr _ => (false, List.ofFn s, d)
+
+/-- The shape and the dtype of a tangent. -/
+instance {n : ℕ} {s : Shape n} {d : DType} : TypeOf (Tan d (Index s)) := ⟨fun t => (tanOf t).2⟩
+
+/-- A computation of `reduce` with two operands that keeps the accumulators. -/
+def firstPair (w : FloatWidth) : Computation₂ w w := ⟨fun a _ => a, fun _ _ da _ => da⟩
 
 /-- The shape and the dtype of the tangent of an array of the shape and dtype `t`. -/
 def tangentOf (t : List ℕ × DType) : List ℕ × DType := (t.1, t.2.tangent)
@@ -1819,6 +2121,8 @@ DOMAIN_BUGS: dict[tuple[str, str], str] = {
     ("scatter_add", "domain partial 11"): "scatter-add-transpose-empty-operand",
     ("scatter_sub", "domain partial 01"): "scatter-add-transpose-empty-operand",
     ("scatter_sub", "domain partial 11"): "scatter-add-transpose-empty-operand",
+    ("reduce2", "domain zero jvp za"): "reduce-jvp-symbolic-zero",
+    ("reduce2", "domain zero jvp az"): "reduce-jvp-symbolic-zero",
 }
 
 
@@ -1852,9 +2156,11 @@ def write_lean(path, items, split):
     for idx, (cid, asserts) in items:
         lines.append(f"-- {cid}")
         # A domain assertion is an example of its own, so that a violation is told apart.
-        main = [a for a in asserts if not a[0].startswith("domain")]
+        # So is a pattern of symbolic zeros, whose equality is too deep to decide in a conjunction.
+        alone = ("domain", "zero")
+        main = [a for a in asserts if not a[0].startswith(alone)]
         groups = [[a] for a in main] if split else [main] if main else []
-        groups += [[a] for a in asserts if a[0].startswith("domain")]
+        groups += [[a] for a in asserts if a[0].startswith(alone)]
         for group in groups:
             if group[0][2] is None:
                 lines.append(group[0][1])

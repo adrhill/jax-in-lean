@@ -178,7 +178,7 @@ theorem powJvp_correct (h : Broadcastable sx sy) :
     (y (uy j) * x (ux j) ^ (y (uy j) - 1)) •
       (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _) +
     (x (ux j) ^ y (uy j) * Real.log (x (ux j))) •
-      (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _), ?_, ?_, ?_⟩
+      (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _), ?_, ?_, ?_, ?_⟩
   · have hopen : IsOpen {p : (Index sx → ℝ) × (Index sy → ℝ) | ∀ j, 0 < p.1 (ux j)} := by
       simp only [Set.ofPred_forall]
       exact isOpen_iInter_of_finite fun j => isOpen_lt continuous_const (by fun_prop)
@@ -187,16 +187,24 @@ theorem powJvp_correct (h : Broadcastable sx sy) :
     exact Scalar.pow_fin (.inl (hp j))
   · refine hasFDerivAt_pi.2 fun j => ?_
     exact (hasFDerivAt_fst_apply (ux j) (x, y)).rpow (hasFDerivAt_snd_apply (uy j) (x, y)) (hx j)
-  · intro g k
-    refine ⟨_, _, powJvpLeft_same h g _ x y fun j => ?_, powJvpRight_same h k x y hx, ?_⟩
-    · rw [← sub_eq_add_neg]
-      exact Scalar.pow_fin (.inl (hx j))
+  · intro g
+    convert powJvpLeft_same h g _ x y (fun j => ?_) using 2
     · funext j
       simp only [ContinuousLinearMap.pi_apply, add_apply,
         smul_apply, ContinuousLinearMap.comp_apply,
         ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_fst', ContinuousLinearMap.coe_snd',
-        smul_eq_mul, Pi.add_apply, ux, uy]
+        smul_eq_mul, Pi.zero_apply, ux, uy]
       ring
+    · rw [← sub_eq_add_neg]
+      exact Scalar.pow_fin (.inl (hx j))
+  · intro k
+    convert powJvpRight_same h k x y hx using 2
+    funext j
+    simp only [ContinuousLinearMap.pi_apply, add_apply,
+      smul_apply, ContinuousLinearMap.comp_apply,
+      ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_fst', ContinuousLinearMap.coe_snd',
+      smul_eq_mul, Pi.zero_apply, ux, uy]
+    ring
 
 /-- For a constant exponent `y`, the JVP rule of `pow` for the base computes the derivative of `x ↦ x ^ y`
 where it is differentiable and finite near `x`, except at `x = 0` for `y = 0`:

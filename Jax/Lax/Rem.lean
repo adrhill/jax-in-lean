@@ -136,7 +136,7 @@ theorem remJvp_correct (h : Broadcastable sx sy) :
   refine ⟨fun p j => p.1 (ux j) - Scalar.truncReal (p.1 (ux j) / p.2 (uy j)) * p.2 (uy j),
     ContinuousLinearMap.pi fun j =>
       (ContinuousLinearMap.proj (ux j) ∘L ContinuousLinearMap.fst ℝ _ _) -
-      c j • (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _), ?_, ?_, ?_⟩
+      c j • (ContinuousLinearMap.proj (uy j) ∘L ContinuousLinearMap.snd ℝ _ _), ?_, ?_, ?_, ?_⟩
   · have hopen : IsOpen {p : (Index sx → ℝ) × (Index sy → ℝ) | ∀ j, p.2 (uy j) ≠ 0} := by
       simp only [Set.ofPred_forall]
       exact isOpen_iInter_of_finite fun j => isOpen_ne_fun (by fun_prop) continuous_const
@@ -157,14 +157,21 @@ theorem remJvp_correct (h : Broadcastable sx sy) :
     exact ((hasFDerivAt_fst_apply (κ := Index sy) (ux j) (x, y)).sub
       ((hasFDerivAt_snd_apply (ι := Index sx) (uy j) (x, y)).const_mul (c j))).congr_of_eventuallyEq
       hev
-  · intro g k
-    refine ⟨fun j => g (ux j), _, .of_eq (funext fun j => maybeBroadcast_apply _ _ j),
-      remJvpRight_same h k x y fun j => (hxy j).1, ?_⟩
+  · intro g
+    refine .of_eq (funext fun j => ?_)
+    refine (maybeBroadcast_apply (broadcastsTo_left sx sy) _ j).trans (congrArg Scalar.fin ?_)
+    simp only [ContinuousLinearMap.pi_apply, sub_apply,
+      ContinuousLinearMap.comp_apply, smul_apply,
+      ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_fst', ContinuousLinearMap.coe_snd',
+      smul_eq_mul, Pi.zero_apply, ux, uy]
+    ring
+  · intro k
+    convert remJvpRight_same h k x y fun j => (hxy j).1 using 2
     funext j
     simp only [ContinuousLinearMap.pi_apply, sub_apply,
       ContinuousLinearMap.comp_apply, smul_apply,
       ContinuousLinearMap.proj_apply, ContinuousLinearMap.coe_fst', ContinuousLinearMap.coe_snd',
-      smul_eq_mul, Pi.add_apply, c, ux, uy, truncReal_eq]
+      smul_eq_mul, Pi.zero_apply, c, ux, uy, truncReal_eq]
     ring
 
 /-- The JVP rules of `rem` are not correct everywhere: `rem(x, 0)` is NaN.

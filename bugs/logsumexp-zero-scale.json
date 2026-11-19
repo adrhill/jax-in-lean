@@ -1,0 +1,61 @@
+{
+  "$schema": "../scripts/bug.schema.json",
+  "title": "`jacfwd` and `jacrev` of `logsumexp(a, b=b)` silently return 0 in `b` where `b` is 0",
+  "status": "reported",
+  "priority": "P1",
+  "primitive": "jax.scipy.special.logsumexp",
+  "source": "jax/_src/ops/special.py:81",
+  "lean_refutation": "Jax.Jaxpr.lseTermsJvp_not_correct",
+  "upstream_issue": "https://github.com/jax-ml/jax/issues/22398",
+  "duplicate_search": null,
+  "maybe_intended": null,
+  "description": [
+    "The derivative of `jax.scipy.special.logsumexp(a, b=b)` in `b` is silently 0 at every entry where `b` is 0.",
+    "Forward and reverse mode agree on the wrong value. The primal is right, and so are both modes where no entry of `b` is 0."
+  ],
+  "expected": [
+    "`logsumexp(a, b=b)` is `log(sum(b * exp(a)))`, which is differentiable in `b` wherever the sum is positive,",
+    "with the partial derivative `exp(a_i) / sum(b * exp(a))` in `b_i`, also where `b_i` is 0.",
+    "For `a = [0, 0]` and `b = [1, 0]`, the gradient in `b` is `[1, 1]`."
+  ],
+  "reproducer": [
+    "import jax",
+    "import jax.numpy as jnp",
+    "from jax.scipy.special import logsumexp",
+    "",
+    "a = jnp.array([0.0, 0.0])",
+    "f = lambda b: logsumexp(a, b=b)",
+    "",
+    "# Where no entry of b is 0, the gradient is exp(a) / sum(b * exp(a)).",
+    "print(jax.jacfwd(f)(jnp.array([1.0, 1.0])))",
+    "# output: [0.5 0.5]",
+    "",
+    "# At b = [1, 0], the gradient is [1, 1], but both modes return 0 for the entry where b is 0.",
+    "b = jnp.array([1.0, 0.0])",
+    "print(jax.jacfwd(f)(b))",
+    "# desired: [1. 1.]",
+    "# actual:  [1. 0.]",
+    "print(jax.jacrev(f)(b))",
+    "# desired: [1. 1.]",
+    "# actual:  [1. 0.]"
+  ],
+  "cause": [
+    "`logsumexp` replaces `a` by `-inf` where `b` is 0 before it sums the terms `exp(a) * b`:",
+    "```",
+    "    a_arr = jnp.where(b_arr != 0, a_arr, -np.inf)",
+    "```",
+    "The terms keep their values, `exp(-inf) * 0 = 0`, but their derivative in `b` is now `exp(-inf) = 0` instead of `exp(a)`.",
+    "The comparison `b_arr != 0` has a zero derivative, which is wrong at `b = 0`, where it is not locally constant."
+  ],
+  "fix": [
+    "Mask `a` without a comparison on `b` in the differentiated path, for example by computing `exp(a - amax) * b` with the original `a` and taking `amax` only over the entries where `b` is not 0."
+  ],
+  "lean": [
+    "`Jax.Jaxpr.lseTerms` models the terms `exp(where(b != 0, a, -inf)) * b` as a jaxpr, and `Jax.Jaxpr.lseTermsJvp` its forward mode in `b`,",
+    "composed from `standard_jvp` of `mul` with the symbolic zero tangent of `exp`.",
+    "`Jax.Jaxpr.lseTermsJvp_correct` proves it correct where no entry of `b` is 0,",
+    "and `Jax.Jaxpr.lseTermsJvp_not_correct` refutes it at every `b` with an entry 0, where the terms are differentiable.",
+    "The rules of `ne`, `select_n`, `exp` and `mul` are each correct; the composition fails because `ne` is not locally constant at 0."
+  ],
+  "jax_version": "0.12.0.1"
+}

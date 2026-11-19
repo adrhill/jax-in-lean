@@ -12,8 +12,9 @@ Values are exact, so a conversion between widths is the identity on values,
 and both rules are correct everywhere.
 They return arrays of the right width: the JVP rule converts the tangent to the new dtype,
 and the transpose rule converts the cotangent back to the old one.
-A conversion from `bool` or an integer dtype has a `float0` tangent, so its rules return symbolic zeros,
-which are not modelled.
+For a symbolic zero cotangent, the transpose rule returns the symbolic zero of the aval of the operand.
+A conversion from `bool` or an integer dtype has a `float0` tangent, so its rules return symbolic zeros;
+it is not modelled.
 -/
 
 @[expose] public section
@@ -42,7 +43,9 @@ def convertFloatJvp (tangent : Tensor (.float w) (Index s)) (_primalResult : Ten
   convertFloat tangent
 
 /-- The transpose rule of `convert_element_type` between floating-point dtypes:
-the cotangent is converted back to the dtype of the operand.
+the cotangent is converted back to the dtype of the operand,
+and a symbolic zero cotangent gives the symbolic zero of the aval of the operand.
+The branch for a `float0` tangent is not taken.
 `jax/_src/lax/lax.py:5799`:
 ```
 def _convert_element_type_transpose_rule(ct, operand, *, new_dtype, weak_type,
@@ -60,8 +63,10 @@ def _convert_element_type_transpose_rule(ct, operand, *, new_dtype, weak_type,
         sharding=operand.aval.sharding)
     return [out]
 ``` -/
-def convertFloatTranspose (ct : Tensor (.float w') (Index s)) : Tensor (.float w) (Index s) :=
-  convertFloat ct
+def convertFloatTranspose (ct : Tan (.float w') (Index s)) : Tan (.float w) (Index s) :=
+  match ct with
+  | .zero _ => .zero (.of (.float w) s)
+  | .arr ct => .arr (convertFloat ct)
 
 /-! ## Correctness -/
 
@@ -73,7 +78,7 @@ theorem convertFloatJvp_correct :
 
 /-- The transpose rule of `convert_element_type` transposes the conversion. -/
 theorem convertFloatTranspose_correct :
-    IsTransposeOf (convertFloatTranspose (w := w) (w' := w') (s := s)) (convertFloat (w := w) (w' := w')) :=
-  fun ct x => ⟨x, ct, rfl, .of_eq rfl, rfl⟩
+    IsTanTransposeOf (convertFloatTranspose (w := w) (w' := w') (s := s)) (convertFloat (w := w) (w' := w')) :=
+  ⟨⟨rfl, rfl⟩, fun ct x => ⟨x, ct, rfl, .of_eq rfl, rfl⟩⟩
 
 end Jax.Lax

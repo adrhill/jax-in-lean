@@ -35,10 +35,12 @@ ad.primitive_jvps[scatter_sub_p] = partial(_scatter_addsub_jvp, scatter_sub_p)
 ``` -/
 def scatterSubJvp (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
     (h : ScatterValid so si su dimensionNumbers)
-    (gOperand : Tensor (.float w) (Index so)) (gUpdates : Tensor (.float w) (Index su))
+    (gOperand : Tan (.float w) (Index so)) (gUpdates : Tan (.float w) (Index su))
     (_operand : Tensor (.float w) (Index so)) (indices : Tensor (.int wi) (Index si)) (_updates : Tensor (.float w) (Index su)) :
-    Tensor (.float w) (Index so) :=
-  scatterSub dimensionNumbers mode h gOperand indices gUpdates
+    Tan (.float w) (Index so) :=
+  match gOperand, gUpdates with
+  | .zero _, .zero _ => .zero (.of (.float w) so)
+  | gOperand, gUpdates => .arr (scatterSub dimensionNumbers mode h gOperand.inst indices gUpdates.inst)
 
 /-- The transpose rule of `scatter_sub`.
 It is `_scatter_addsub_transpose_rule` with `prim = scatter_sub_p`, quoted at `scatterAddTranspose`,
@@ -48,16 +50,20 @@ which negates the cotangent of `updates`, `jax/_src/lax/slicing.py:2908`:
         update_t = lax.neg(update_t)
 ``` -/
 def scatterSubTranspose (dimensionNumbers : ScatterDimensionNumbers) (mode : GatherScatterMode)
-    (t : Tensor (.float w) (Index so)) (operand : Option (Tensor (.float w) (Index so))) (indices : Tensor (.int wi) (Index si))
+    (t : Tan (.float w) (Index so)) (operand : Option (Tensor (.float w) (Index so))) (indices : Tensor (.int wi) (Index si))
     (updates : Option (Tensor (.float w) (Index su))) :
-    Option (Option (Tensor (.float w) (Index so)) × Option (Tensor (.float w) (Index
+    Option (Option (Tan (.float w) (Index so)) × Option (Tan (.float w) (Index
       (gatherShape si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers))))) :=
-  let operandT := if operand.isNone then some t else none
+  match t with
+  | .zero _ => some (if operand.isNone then some (.zero (.of (.float w) so)) else none,
+      if updates.isNone then some (.zero (.of (.float w) su)) else none)
+  | .arr t =>
+  let operandT := if operand.isNone then some (.arr t) else none
   if updates.isNone then
     if h : GatherValid so si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers) ∧
         GatherLowers so si dimensionNumbers.toGather (scatterSliceSizes n su dimensionNumbers) then
-      some (operandT, some (neg (gather dimensionNumbers.toGather
-        (scatterSliceSizes n su dimensionNumbers) mode 0 h.1 h.2 t indices)))
+      some (operandT, some (.arr (neg (gather dimensionNumbers.toGather
+        (scatterSliceSizes n su dimensionNumbers) mode 0 h.1 h.2 t indices))))
     else none
   else some (operandT, none)
 
@@ -89,9 +95,14 @@ theorem scatterSubJvp_correct (dn : ScatterDimensionNumbers) (mode : GatherScatt
       (fun x y => scatterSub (w := w) dn mode h x indices y) := by
   intro x y _
   let L := LinearMap.toContinuousLinearMap (scatterSubReal (so := so) (su := su) dn mode indices)
-  exact ⟨scatterSubReal dn mode indices, L,
+  refine ⟨scatterSubReal dn mode indices, L,
     .of_forall fun p => scatterSub_ofReal dn mode h indices p.1 p.2, L.hasFDerivAt,
-    fun g k => .of_eq (scatterSub_ofReal dn mode h indices g k)⟩
+    fun zg zh g k hz => ?_⟩
+  cases zg <;> cases zh
+  · exact .of_eq (scatterSub_ofReal dn mode h indices g k)
+  · exact .of_eq (scatterSub_ofReal dn mode h indices g 0)
+  · exact .of_eq (scatterSub_ofReal dn mode h indices 0 k)
+  · simp at hz
 
 /-- The transpose rule of `scatter_sub` transposes `scatter_sub` in the modes `CLIP` and `FILL_OR_DROP`,
 where the `gather` of the rule passes its checks, whichever arguments are linear inputs. -/
@@ -104,17 +115,18 @@ theorem scatterSubTranspose_correct (dn : ScatterDimensionNumbers) (mode : Gathe
       (fun x y => scatterSub (w := w) dn mode h x indices y) := by
   refine ⟨id,
     fun t => neg (gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl t indices),
-    fun ct x y => ?_, fun ct x y hxy => ?_⟩
+    fun ct x y => ?_, fun x y hxy => ⟨fun ct => ?_, ?_⟩⟩
   · obtain ⟨z, u, v, hz, hu, ⟨_, hr, hs, he⟩, hsum⟩ :=
       scatterAdd_isTranspose₂Of dn mode h hg hgl indices hm ct x (-y)
     refine ⟨z, u, -v, hz, hu, ⟨rfl, hr, hs, fun i j hij => ?_⟩, ?_⟩
     · show -(gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl (ofReal ct) indices i) = _
       exact (congrArg (-·) (he i j hij)).trans rfl
     · simpa using hsum
-  · refine ⟨if x.isNone then some (ofReal ct) else none,
-      if y.isNone then some (neg (gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl
-        (ofReal ct) indices)) else none, ?_, fun hx => by simp [hx], fun hy => by simp [hy]⟩
+  · refine ⟨if x.isNone then some (.arr (ofReal ct)) else none,
+      if y.isNone then some (.arr (neg (gather dn.toGather (scatterSliceSizes n su dn) mode 0 hg hgl
+        (ofReal ct) indices))) else none, ?_, fun hx => by simp [hx], fun hy => by simp [hy]⟩
     cases y <;> simp [scatterSubTranspose, hg, hgl]
+  · exact ⟨_, _, rfl, fun hx => by simp [hx, Tan.Same], fun hy => by simp [hy, Tan.Same]⟩
 
 /-- The transpose rule of `scatter_sub` raises for an operand of size 0 on an inserted axis:
 here the operand has shape `(0,)`, as in `jnp.zeros(0).at[jnp.array([0])].subtract(updates)`.
@@ -128,7 +140,7 @@ theorem scatterSubTranspose_not_correct (mode : GatherScatterMode)
       (fun x y => scatterSub (w := w) (so := ![0]) (su := ![1]) ⟨[], [0], [0], [], []⟩ mode
         (by decide) x indices y) := by
   rintro ⟨_, _, _, hrule⟩
-  obtain ⟨_, _, hsome, _⟩ := hrule 0 (some 0) none (.inr rfl)
+  obtain ⟨_, _, hsome, _⟩ := (hrule (some 0) none (.inr rfl)).1 0
   have hno : ¬ (GatherValid ![0] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)
       (scatterSliceSizes 1 ![1] ⟨[], [0], [0], [], []⟩) ∧
       GatherLowers ![0] ![1, 1] (ScatterDimensionNumbers.toGather ⟨[], [0], [0], [], []⟩)

@@ -22,16 +22,15 @@ namespace Jax.Lax
 
 variable {n : ℕ} {s : Shape n} {sv : Shape 0} {w : FloatWidth}
 
-/-- The JVP rule of `pad`, which applies the primitive to the tangents.
+/-- The JVP rule of `pad`, `linear_jvp`, which applies the primitive to the tangents.
 The tangents come first, then the primals.
-`jax/_src/lax/lax.py:8260`: `ad.deflinear2(pad_p, _pad_transpose)` and
-`jax/_src/interpreters/ad.py:950`: `return val_out, primitive.bind(*tangents, **params)` -/
+`jax/_src/lax/lax.py:8260`: `ad.deflinear2(pad_p, _pad_transpose)` -/
 noncomputable def padJvp (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (operandDot : Tensor (.float w) (Index s)) (paddingValueDot : Tensor (.float w) (Index sv))
+    (operandDot : Tan (.float w) (Index s)) (paddingValueDot : Tan (.float w) (Index sv))
     (_operand : Tensor (.float w) (Index s)) (_paddingValue : Tensor (.float w) (Index sv)) :
-    Tensor (.float w) (Index (padShape s lo hi interior)) :=
-  pad lo hi interior h operandDot paddingValueDot
+    Tan (.float w) (Index (padShape s lo hi interior)) :=
+  linearJvp₂ (pad lo hi interior h) operandDot paddingValueDot
 
 /-- The shape check of the `pad` in `_pad_transpose`, which undoes the edge padding. -/
 theorem padTranspose_unpad (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
@@ -53,7 +52,8 @@ The undefined primal `operand` is replaced by its shape `s`.
 ```
 def _pad_transpose(t, operand, padding_value, *, padding_config):
   if type(t) is ad_util.Zero:
-    ...
+    t_operand = ad_util.Zero(operand.aval) if ad.is_undefined_primal(operand) else None
+    t_padv = ad_util.Zero(padding_value.aval) if ad.is_undefined_primal(padding_value) else None
   else:
     lo, hi, interior = util.unzip3(padding_config)
     total = lambda x: reduce_sum(x, list(range(t.ndim)))
@@ -99,26 +99,39 @@ noncomputable def padTransposePaddingValue (s : Shape n) (lo hi : Fin n → ℤ)
 An argument that is a linear input is `none`, as in `IsPartialTranspose₂Of`,
 and the result `none` is a raised exception:
 `total(t_operand)` calls `reduce_sum(None, ...)` if `operand` is not a linear input.
-`jax/_src/lax/lax.py:8232`:
+For a symbolic zero cotangent, the cotangent of a linear input is the symbolic zero of its aval.
+`linear_transpose2` of `ad.deflinear2`, `jax/_src/interpreters/ad.py:964`, returns the same symbolic zeros
+before it calls the rule, so the first branch is never taken.
+`jax/_src/lax/lax.py:8217`:
 ```
+def _pad_transpose(t, operand, padding_value, *, padding_config):
+  if type(t) is ad_util.Zero:
+    t_operand = ad_util.Zero(operand.aval) if ad.is_undefined_primal(operand) else None
+    t_padv = ad_util.Zero(padding_value.aval) if ad.is_undefined_primal(padding_value) else None
+  else:
+    ...
     t_operand = t_op() if ad.is_undefined_primal(operand) else None
     t_padv = sub(total(t), total(t_operand)) if ad.is_undefined_primal(padding_value) else None
   return [t_operand, t_padv]
 ``` -/
 noncomputable def padTranspose (s : Shape n) (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
-    (t : Tensor (.float w) (Index (padShape s lo hi interior))) (operand : Option (Tensor (.float w) (Index s)))
+    (t : Tan (.float w) (Index (padShape s lo hi interior))) (operand : Option (Tensor (.float w) (Index s)))
     (paddingValue : Option (Tensor (.float w) (Index sv))) :
-    Option (Option (Tensor (.float w) (Index (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0)
+    Option (Option (Tan (.float w) (Index (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0)
         (interior + 1)))) ×
-      Option (Tensor (.float w) (Index (broadcastShape (padShape s lo hi interior ∘ keptAxes Finset.univ)
+      Option (Tan (.float w) (Index (broadcastShape (padShape s lo hi interior ∘ keptAxes Finset.univ)
         (sliceShape 0 (padShape (padShape s lo hi interior) (-lo) (-hi) 0) (interior + 1) ∘
           keptAxes Finset.univ))))) :=
-  let tOperand := if operand.isNone then some (padTransposeOperand s lo hi interior h t) else none
-  if paddingValue.isNone then
-    tOperand.map fun tOp => (tOperand,
-      some (sub (broadcastable_total _ _) (reduceSum Finset.univ t) (reduceSum Finset.univ tOp)))
-  else some (tOperand, none)
+  match t with
+  | .zero _ => some (if operand.isNone then some (.zero (.of (.float w) s)) else none,
+      if paddingValue.isNone then some (.zero (.of (.float w) sv)) else none)
+  | .arr t =>
+    let tOperand := if operand.isNone then some (padTransposeOperand s lo hi interior h t) else none
+    if paddingValue.isNone then
+      tOperand.map fun tOp => (tOperand.map .arr,
+        some (.arr (sub (broadcastable_total _ _) (reduceSum Finset.univ t) (reduceSum Finset.univ tOp))))
+    else some (tOperand.map .arr, none)
 
 /-! ## Proofs -/
 
@@ -357,8 +370,13 @@ theorem padJvp_correct (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
   intro x v _
   let F := padReal (s := s) (sv := sv) lo hi interior
   let L := LinearMap.toContinuousLinearMap F
-  exact ⟨F, L, .of_forall fun p => pad_ofReal lo hi interior h p.1 p.2, L.hasFDerivAt,
-    fun g k => .of_eq (pad_ofReal lo hi interior h g k)⟩
+  refine ⟨F, L, .of_forall fun p => pad_ofReal lo hi interior h p.1 p.2, L.hasFDerivAt,
+    fun zg zh g k hz => ?_⟩
+  cases zg <;> cases zh
+  · exact .of_eq (pad_ofReal lo hi interior h g k)
+  · exact .of_eq (pad_ofReal lo hi interior h g 0)
+  · exact .of_eq (pad_ofReal lo hi interior h 0 k)
+  · simp at hz
 
 /-- The transpose rules of `pad` transpose `pad`,
 where `operand` and `padding_value` are both linear inputs. -/
@@ -390,9 +408,9 @@ theorem padTranspose_correct (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
 theorem padTranspose_none_none (lo hi : Fin n → ℤ) (interior : Fin n → ℕ)
     (h : ∀ d, 0 ≤ lo d + hi d + dilateDim (s d) (interior d + 1))
     (t : Tensor (.float w) (Index (padShape s lo hi interior))) :
-    padTranspose (sv := sv) s lo hi interior h t none none =
-      some (some (padTransposeOperand s lo hi interior h t),
-        some (padTransposePaddingValue s lo hi interior h t)) :=
+    padTranspose (sv := sv) s lo hi interior h (.arr t) none none =
+      some (some (.arr (padTransposeOperand s lo hi interior h t)),
+        some (.arr (padTransposePaddingValue s lo hi interior h t))) :=
   rfl
 
 /-- The transpose rule of `pad` is not correct for any padding configuration:
@@ -402,7 +420,7 @@ theorem padTranspose_not_correct (lo hi : Fin n → ℤ) (interior : Fin n → �
     ¬ IsPartialTranspose₂Of (padTranspose (sv := sv) s lo hi interior h)
       (pad (d := .float w) lo hi interior h) := by
   rintro ⟨_, _, _, hrule⟩
-  obtain ⟨_, _, hsome, _⟩ := hrule 0 (some 0) none (.inr rfl)
+  obtain ⟨_, _, hsome, _⟩ := (hrule (some 0) none (.inr rfl)).1 0
   simp [padTranspose] at hsome
 
 end Jax.Lax

@@ -5,10 +5,15 @@ public import Jax.Lax.Primal
 /-!
 # `reduce`
 
-The JVP rule of the `reduce` primitive of `jax/_src/lax/lax.py`, with one operand.
-The rule is correct for a commutative monoid (`reduceJvp_correct`).
+The JVP rule of the `reduce` primitive of `jax/_src/lax/lax.py`.
+With one operand, the rule is correct for a commutative monoid (`reduceJvp_correct`).
 It is wrong for a monoid that is not commutative (`reduceJvp_not_correct`),
 which the `lax.reduce` docstring allows.
+
+With two operands, the rule raises if only one operand has a tangent that is not a symbolic zero,
+at every point and for every computation (`reduce₂Jvp_not_correct`):
+`_reduce_jvp` passes the symbolic zero to `reshape`.
+See `bugs/reduce-jvp-symbolic-zero.json`.
 -/
 
 @[expose] public section
@@ -587,5 +592,53 @@ theorem reduceJvp_correct_needs_comm :
   reduceJvp_not_correct fun x hx =>
     h lastNotOne 1 [0] _ lastNotOne_isMonoidOp lastNotOne_jvp_one (.inl ⟨1, rfl⟩) x
       (lastNotOne_mem_reduceJvpDomain _ hx)
+
+/-! ## Two operands -/
+
+section Two
+
+variable {wx wy : FloatWidth}
+
+/-- The JVP rule of `reduce` with two operands, `_reduce_jvp_rule`, quoted at `reduceJvp`.
+The tangents come first, then the operands, and the rule returns the tangents of both results,
+or `none` if it raises.
+`_reduce_jvp` reshapes every tangent, and `reshape` raises a `TypeError` for a symbolic zero,
+which is not an array. So the rule raises unless both tangents are arrays.
+Where both are, it differentiates `_reduce_tree` with `api.jvp` as for one operand,
+on the pairs of entries and of their tangents.
+`jax/_src/lax/lax.py:9108`:
+```
+def _reduce_jvp(reducer, init_values, primals, tangents, axes):
+  ...
+  primals = tuple(reshape(x, new_shape, permutation) for x in primals)
+  tangents = tuple(reshape(t, new_shape, permutation) for t in tangents)
+``` -/
+def reduce₂Jvp {s : Shape n} (computation : Computation₂ wx wy) (initValues : Scalar wx × Scalar wy)
+    (dimensions : List (Fin n)) (_hd : dimensions.Nodup) (xDot : Tan (.float wx) (Index s))
+    (yDot : Tan (.float wy) (Index s)) (x : Tensor (.float wx) (Index s)) (y : Tensor (.float wy) (Index s)) :
+    Option (Tan (.float wx) (Index (s ∘ keptAxes dimensions.toFinset)) ×
+      Tan (.float wy) (Index (s ∘ keptAxes dimensions.toFinset))) :=
+  match xDot, yDot with
+  | .arr xDot, .arr yDot =>
+    let slice {w : FloatWidth} (a : Tensor (.float w) (Index s)) j :=
+      reductionSlice dimensions (fun _ => List.mem_toFinset.symm) a j
+    let r := fun j => (reduceTree (fun a b => (computation.op a.1 b.1, computation.jvp a.1 b.1 a.2 b.2))
+      (initValues, (0, 0)) _ fun p => ((slice x j p, slice y j p), (slice xDot j p, slice yDot j p))).2
+    some (.arr fun j => (r j).1, .arr fun j => (r j).2)
+  | _, _ => none
+
+/-- The JVP rule of `reduce` with two operands is not correct at any point, for any computation:
+it raises where only the first operand has a tangent. -/
+theorem reduce₂Jvp_not_correct {s : Shape n} (computation : Computation₂ wx wy)
+    (initValues : Scalar wx × Scalar wy) (dimensions : List (Fin n)) (hd : dimensions.Nodup)
+    (x : Index s → ℝ) (y : Index s → ℝ) :
+    ¬ IsJointJvp₂₂OfOn (reduce₂Jvp computation initValues dimensions hd)
+      (reduce₂ computation initValues dimensions hd) {(x, y)} := by
+  intro h
+  obtain ⟨_, _, _, _, _, _, _, hrule⟩ := h x y rfl
+  obtain ⟨_, _, hsome, -⟩ := hrule false true 0 0 (.inl rfl)
+  simp [reduce₂Jvp] at hsome
+
+end Two
 
 end Jax.Lax

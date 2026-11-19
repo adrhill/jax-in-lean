@@ -121,6 +121,7 @@ def registry : List Entry := [
   ⟨``Jax.Lax.reduceJvp_correct, .proven⟩,
   ⟨``Jax.Lax.reduceJvp_not_correct, .bug "reduce-jvp-noncommutative"⟩,
   ⟨``Jax.Lax.reduceJvp_correct_needs_comm, .bug "reduce-jvp-noncommutative"⟩,
+  ⟨``Jax.Lax.reduce₂Jvp_not_correct, .bug "reduce-jvp-symbolic-zero"⟩,
   -- `Jax/Lax/ReduceMax.lean`
   ⟨``Jax.Lax.reduceMaxJvp_correct, .proven⟩,
   -- `Jax/Lax/ReduceSum.lean`
@@ -141,6 +142,7 @@ def registry : List Entry := [
   ⟨``Jax.Lax.scatterSubTranspose_not_correct, .bug "scatter-add-transpose-empty-operand"⟩,
   -- `Jax/Lax/SelectN.lean`
   ⟨``Jax.Lax.selectNJvp_correct, .proven⟩,
+  ⟨``Jax.Lax.selectN_isTranspose₂Of, .proven⟩,
   ⟨``Jax.Lax.selectNTranspose_correct, .proven⟩,
   -- `Jax/Lax/Sin.lean`
   ⟨``Jax.Lax.sinJvp_correct, .proven⟩,
@@ -150,6 +152,12 @@ def registry : List Entry := [
   -- `Jax/Lax/Sqrt.lean`
   ⟨``Jax.Lax.sqrtJvp_correct, .proven⟩,
   ⟨``Jax.Lax.sqrt_not_isJvpOfOn, notDifferentiable⟩,
+  -- `Jax/Jaxpr/LogsumexpZeroScale.lean`
+  ⟨``Jax.Jaxpr.lseTerms_same, .proven⟩,
+  ⟨``Jax.Jaxpr.lseTermsJvp_same, .proven⟩,
+  ⟨``Jax.Jaxpr.lseTermsJvp_correct, .proven⟩,
+  ⟨``Jax.Jaxpr.lseTermsJvp_not_correct, .bug "logsumexp-zero-scale"⟩,
+  ⟨``Jax.Jaxpr.lseTermsJvp_not_correct_reproducer, .bug "logsumexp-zero-scale"⟩,
   -- `Jax/Jaxpr/MaxInitial.lean`
   ⟨``Jax.Jaxpr.maxInitial_hasZeroJvp, .proven⟩,
   ⟨``Jax.Jaxpr.maxInitialJvp_not_correct, .bug "reduce-max-jvp-empty-axis"⟩,
@@ -186,8 +194,9 @@ def proofHelpers : List Name := [
 /-- The correctness notions of `Jax/Core.lean`. A theorem that states one of them is about a rule. -/
 def notions : List Name := [
   ``IsJvpOfOn, ``IsJvpOf, ``IsJvp₂OfOn, ``IsJvp₂Of, ``IsJointJvp₂OfOn, ``IsJointJvp₂Of,
-  ``IsJvp₃OfOn, ``IsJvp₃Of, ``IsZeroJvp₂OfOn, ``IsZeroJvp₂Of, ``IsTransposeOf, ``IsTranspose₂Of,
-  ``IsPartialTranspose₂Of, ``IsFwdOf, ``IsBatchOf₁, ``IsBatchOf₃]
+  ``IsJointJvp₂₂OfOn, ``IsJointJvp₂₂Of, ``IsJvp₃OfOn, ``IsJvp₃Of, ``IsZeroJvp₂OfOn, ``IsZeroJvp₂Of,
+  ``IsTransposeOf, ``IsTanTransposeOf, ``IsTranspose₂Of, ``IsPartialTranspose₂Of, ``IsFwdOf,
+  ``IsBatchOf₁, ``IsBatchOf₃]
 
 /-- The module that declares `n`, if it is a module of the model. -/
 def modelModule? (env : Environment) (n : Name) : Option Name := do
