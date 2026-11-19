@@ -57,7 +57,9 @@
   "lean": [
     "`Jax.Lax.broadcastInDimTranspose_correct` proves the rule correct if `broadcast_dimensions` is strictly increasing,",
     "and `Jax.Lax.broadcastInDimTranspose_not_correct` shows that for `broadcast_dimensions = (1, 0)`",
-    "it returns a cotangent of shape `(2, 3)` for an operand of shape `(3, 2)`."
+    "it returns a cotangent of shape `(2, 3)` for an operand of shape `(3, 2)`.",
+    "The domain check of `scripts/shapes.py` finds it in Lean: the cotangent that the transpose rule returns",
+    "does not have the shape of the operand."
   ],
   "related": [
     "broadcast-in-dim-forwarding"

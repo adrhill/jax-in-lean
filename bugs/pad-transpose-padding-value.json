@@ -72,7 +72,9 @@
     "`Jax.Lax.padTranspose_correct` proves both cotangents correct where both arguments are linear inputs,",
     "also for negative and interior padding.",
     "`Jax.Lax.padTranspose_not_correct` shows that the rule raises for every padding configuration",
-    "where `padding_value` is a linear input and `operand` is not."
+    "where `padding_value` is a linear input and `operand` is not.",
+    "The domain check of `scripts/shapes.py` finds it in Lean: where only `padding_value` is a linear input,",
+    "the transpose rule returns no cotangent."
   ],
   "jax_version": "0.12.0.1"
 }

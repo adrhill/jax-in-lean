@@ -77,7 +77,9 @@
   "lean": [
     "`Jax.Lax.polynomialJvp_correct` proves the rule correct if `a_0` broadcasts to the shape of `x` and the other coefficients.",
     "The model has no rank-0 arrays, so `Jax.Lax.polynomialJvp_not_correct` uses a linear coefficient of shape `(1,)`.",
-    "JAX behaves the same for the scalar coefficient `2.0` of the upstream issue."
+    "JAX behaves the same for the scalar coefficient `2.0` of the upstream issue.",
+    "The domain check of `scripts/shapes.py` finds it in Lean: the tangent that the JVP rule returns",
+    "does not have the shape of the result of `polynomial`."
   ],
   "jax_version": "0.12.0.1"
 }

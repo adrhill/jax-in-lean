@@ -69,7 +69,9 @@
     "The shape check of `select` is a proof argument of the rules for scalar bounds,",
     "`Jax.Lax.clampJvpMinScalar` and `Jax.Lax.clampJvpMaxScalar`.",
     "`Jax.Lax.clampJvpScalar_not_defined` shows that it does not follow from the shape checks of `clamp`,",
-    "and `Jax.Lax.clampJvpScalar_defined_iff` that it holds exactly when `x` has rank 0."
+    "and `Jax.Lax.clampJvpScalar_defined_iff` that it holds exactly when `x` has rank 0.",
+    "The domain check of `scripts/shapes.py` finds it in Lean: where `clamp` accepts scalar bounds and `x` has rank 1 or more,",
+    "the proof argument of the rules for scalar bounds is false."
   ],
   "jax_version": "0.12.0.1"
 }

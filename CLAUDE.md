@@ -18,7 +18,7 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 └── Jaxpr/<Name>.lean # Jaxprs of several primitives, e.g. from upstream issues
 bugs/<name>.json    # One record per JAX bug, with its reproducer
 bugs/CLAUDE.md      # How to write a bug record
-scripts/audit.sh    # Forbidden-token scan, build, bug reproducers
+scripts/audit.sh    # Forbidden-token scan, build, bug reproducers, shapes.py
 scripts/bugs.py     # Checks the bug records and runs their reproducers
 scripts/shapes.py   # Shape- and dtype-level differential test of the model against JAX
 gen/                # Generated Lean files of scripts/shapes.py (gitignored)
@@ -77,6 +77,9 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
   and checks with `decide` that the shapes and dtypes in the model's types agree,
   and that JAX rejects an input exactly when a proof argument is false.
   It checks with `#check` and `#check_failure` that JAX rejects arguments of different dtypes exactly when Lean does.
+  It also decides in Lean that every JVP rule of the model returns a tangent of the primal result,
+  and every transpose rule a cotangent of its input, with their shapes and tangent dtypes;
+  a violation is a bug, listed in `DOMAIN_BUGS` once it has a record.
   A new primitive or rule gets cases there. Model definitions must reduce by `decide` on concrete shapes.
 - **Primal semantics** are not defined in Python but by XLA.
   Take them from the `lax` docstring and the [StableHLO spec](https://github.com/openxla/stablehlo/blob/main/docs/spec.md).
@@ -90,6 +93,8 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
   or with `IsJvpOfOn` or `IsJvp₂OfOn` and the largest domain on which it holds.
 - Never weaken a statement to make it provable.
   If a property is false, prove its negation with a concrete counterexample and keep both the statement and the refutation.
+- Bugs are found in Lean: a refuted statement about the model, or a domain check of `scripts/shapes.py`.
+  Never by testing JAX against itself.
 - A refutation is a JAX bug only with a Python reproducer that shows it on the pinned JAX.
   Every bug gets a record `bugs/<name>.json` that follows `scripts/bug.schema.json`.
   It reads as a self-contained issue on the JAX repository, as `bugs/CLAUDE.md` describes.

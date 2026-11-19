@@ -53,6 +53,11 @@ and that JAX raises exactly when a proof argument of the model is false.
 It also checks with `#check` and `#check_failure` that Lean rejects arguments of different dtypes exactly when JAX does.
 The test compares the model with JAX, not with the mathematics, so JAX's bugs pass it.
 
+The same test also checks the model against itself.
+A JVP rule is a derivative, so its result must have the shape and tangent dtype of the primal result,
+and a transpose rule is its adjoint, so its result must have those of its input.
+Lean decides this for every case, and a violation is a bug of the rule.
+
 ## Setup
 
 Requires [Nix](https://nixos.org) with flakes.

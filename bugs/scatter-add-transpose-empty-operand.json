@@ -78,7 +78,10 @@
   "lean": [
     "`Jax.Lax.scatterAddTranspose_correct` proves the rule correct in the modes `CLIP` and `FILL_OR_DROP`",
     "wherever the `gather` passes its checks.",
-    "`Jax.Lax.scatterAddTranspose_not_correct` shows that the rule raises for an operand of shape `(0,)`."
+    "`Jax.Lax.scatterAddTranspose_not_correct` shows that the rule raises for an operand of shape `(0,)`.",
+    "`Jax.Lax.scatterSubTranspose_correct` and `Jax.Lax.scatterSubTranspose_not_correct` show the same for `scatter_sub`.",
+    "The domain check of `scripts/shapes.py` finds it in Lean for both primitives: where the operand is empty",
+    "on an indexed axis and the updates are a linear input, the transpose rule returns no cotangent."
   ],
   "jax_version": "0.12.0.1"
 }

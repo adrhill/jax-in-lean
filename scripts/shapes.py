@@ -27,6 +27,13 @@ An expected disagreement is listed in `EXPECTED`: for those cases the example st
 side of the disagreement instead, so Lean still checks that the disagreement is exactly the expected one.
 On failure, the failing cases are checked again assertion by assertion, and the model's shapes are printed.
 
+Domain checks compare the model with itself, not with JAX, and are how this test finds bugs.
+A JVP rule is the derivative of the primitive, so its result must have the shape of the primal result
+and its tangent dtype; a transpose rule is the adjoint, so its result must have the shape and dtype of its input.
+Where the primitive accepts its arguments, the rule must accept them too.
+Each such statement is an `example` of its own, decided in Lean, for every case that agrees with JAX.
+A violation is a bug of the rule. Those with a record are listed in `DOMAIN_BUGS`, and any other fails the test.
+
 Usage: `python scripts/shapes.py [--jobs N] [--only PRIM]`.
 """
 
@@ -1338,7 +1345,7 @@ FWD = {
 }
 
 
-def pad_partial(p, lin):
+def pad_transpose(p, lin):
     n = len(p["s"])
     lo, hi, interior = (
         f"(![{', '.join(str(c[i]) for c in p['config'])}] : Fin {n} → {ty})"
@@ -1346,25 +1353,39 @@ def pad_partial(p, lin):
     )
     x, v = ("none" if c == "1" else "(some 0)" for c in lin)
     return (
-        f"(padTranspose (sv := {lshape(p['sv'])}) {lwidths(p)} {lshape(p['s'])} {lo} {hi} {interior} PROOF0 0 "
-        f"{x} {v}).map (fun r => [r.1.isSome, r.2.isSome])"
+        f"padTranspose (sv := {lshape(p['sv'])}) {lwidths(p)} {lshape(p['s'])} {lo} {hi} {interior} PROOF0 0 "
+        f"{x} {v}"
     )
+
+
+def pad_partial(p, lin):
+    return f"({pad_transpose(p, lin)}).map (fun r => [r.1.isSome, r.2.isSome])"
 
 
 # Transpose rules for every choice of linear inputs: the Lean term that is `none` if the rule raises,
 # and otherwise lists which arguments get a cotangent.
-def scatter_partial(name, p, lin):
+def scatter_transpose(name, p, lin):
     SO, SI, SU, DN = lshape(p["so"]), lshape(p["si"]), lshape(p["su"]), lscatter(p["dn"])
     x, u = ("none" if c == "1" else "(some 0)" for c in lin)
     return (
-        f"({name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {lwidths(p)} {DN} {LMODE[p['mode']]} 0 "
-        f"{x} (fun _ => 0) {u}).map (fun r => (r.1.isSome, r.2.map typeOf))"
+        f"{name}Transpose (so := {SO}) (si := {SI}) (su := {SU}) {lwidths(p)} {DN} {LMODE[p['mode']]} 0 "
+        f"{x} (fun _ => 0) {u}"
     )
+
+
+def scatter_partial(name, p, lin):
+    return f"({scatter_transpose(name, p, lin)}).map (fun r => (r.1.isSome, r.2.map typeOf))"
 
 
 PARTIAL = {
     "pad": pad_partial,
     **{prim: functools.partial(scatter_partial, name) for prim, name in SCATTER.items()},
+}
+
+# The transpose rules of `PARTIAL` themselves, for one choice of linear inputs.
+PARTIAL_TERM = {
+    "pad": pad_transpose,
+    **{prim: functools.partial(scatter_transpose, name) for prim, name in SCATTER.items()},
 }
 
 
@@ -1593,6 +1614,66 @@ VJP_INPUTS = {
 }
 
 
+def linear_choices(k):
+    """Every nonempty choice of linear inputs among `k`, as a string of `1` (linear) and `0`."""
+    return ["".join(c) for c in itertools.product("01", repeat=k) if "1" in c]
+
+
+def domain_assertions(prim, p, args, terms, vjp):
+    """The propositions that the model's rules map into the right spaces, decided in Lean.
+
+    A JVP rule is the derivative of the primitive, so its result is a tangent of the primal result:
+    it has the shape of the primal result and its tangent dtype.
+    A transpose rule is the adjoint of the derivative, so its result is a cotangent of an input:
+    it has the shape of that input and its tangent dtype.
+    Where the primitive accepts its arguments, every rule also accepts them:
+    a proof argument of a rule that is not one of the primitive is true.
+    These compare the model with itself, not with JAX, so a violation is a bug of the rule.
+    """
+    primal = fill(terms["primal"], args)
+    out = []
+
+    def rule_only(term):
+        return [
+            i
+            for i in range(len(args))
+            if f"PROOF{i}" in term and f"PROOF{i}" not in terms["primal"]
+        ]
+
+    def bind(term, idx):
+        for i in idx:
+            term = term.replace(f"PROOF{i}", f"h{i}")
+        return fill(term, args)
+
+    def with_args(idx, prop):
+        """`prop` under the rule's own proof arguments, which must also be true."""
+        if not idx:
+            return prop
+        hyps = " ".join(f"(h{i} : {args[i][0]})" for i in idx)
+        return f"({' ∧ '.join(f'({args[i][0]})' for i in idx)}) ∧ ∀ {hyps}, {prop}"
+
+    # Every JVP rule, also those that reverse mode does not call.
+    pairs = vjp + [(t, "primal") for t in terms if t.startswith("jvp") and t not in dict(vjp)]
+    for t, o in pairs:
+        idx = rule_only(terms[t])
+        want = f"tangentOf (typeOf ({primal}))" if o == "primal" else ltype(o, p["dt"])
+        prop = f"typeOf ({bind(terms[t], idx)}) = {want}"
+        out.append((f"domain {t}", with_args(idx, prop), "decide"))
+    if prim in PARTIAL:
+        ins = [p[k] for k in VJP_INPUTS[prim]]
+        for lin in linear_choices(len(ins)):
+            term = PARTIAL_TERM[prim](p, lin)
+            cts = ", ".join(
+                f"some {ltype(s, p['dt'])}" if c == "1" else "none" for c, s in zip(lin, ins)
+            )
+            prop = (
+                f"({fill(term, args)}).map (fun r => (r.1.map typeOf, r.2.map typeOf)) "
+                f"= some ({cts})"
+            )
+            out.append((f"domain partial {lin}", prop, "decide"))
+    return out
+
+
 def assertions(prim, p, rec):
     """The Lean propositions that the case asserts, with names, and the tactic that proves them.
 
@@ -1693,7 +1774,7 @@ def assertions(prim, p, rec):
             if len(got) != len(want):
                 cts = "False"
             out.append(("user_vjp", f"{conj} ∧ {cts}", "decide"))
-    return None, out
+    return None, out + domain_assertions(prim, p, args, terms, vjp)
 
 
 HEADER = """import Jax
@@ -1726,6 +1807,39 @@ def positions {n : ℕ} {s : Shape n} (js : List (List ℕ)) (f : (ℕ → ℕ) 
 """
 
 
+# Domain violations that are known bugs: the primitive and the domain assertion, and the record.
+DOMAIN_BUGS: dict[tuple[str, str], str] = {
+    ("broadcast_in_dim", "domain transpose"): "broadcast-in-dim-transpose",
+    ("pad", "domain partial 01"): "pad-transpose-padding-value",
+    ("clamp", "domain jvp_min_scalar"): "clamp-jvp-scalar-bounds",
+    ("clamp", "domain jvp_max_scalar"): "clamp-jvp-scalar-bounds",
+    ("polynomial", "domain jvp"): "polynomial-jvp-broadcast",
+    ("scatter_add", "domain partial 01"): "scatter-add-transpose-empty-operand",
+    ("scatter_add", "domain partial 11"): "scatter-add-transpose-empty-operand",
+    ("scatter_sub", "domain partial 01"): "scatter-add-transpose-empty-operand",
+    ("scatter_sub", "domain partial 11"): "scatter-add-transpose-empty-operand",
+}
+
+
+def report_findings(findings, cases, items, prims):
+    """Print the domain violations. Returns the number of those that are not known bugs."""
+    new = 0
+    for (prim, name), idxs in sorted(findings.items()):
+        bug = DOMAIN_BUGS.get((prim, name))
+        if bug:
+            print(f"  domain violation {prim} {name}: {len(idxs)} cases (bugs/{bug}.json)")
+            continue
+        new += 1
+        print(f"\nNEW domain violation {prim} {name}: {len(idxs)} cases, e.g.")
+        for i in idxs[:5]:
+            print(f"  {items[i][1][0]}")
+    for (prim, name), bug in DOMAIN_BUGS.items():
+        if prim in prims and (prim, name) not in findings:
+            new += 1
+            print(f"\nknown domain violation {prim} {name} (bugs/{bug}.json) no longer found")
+    return new
+
+
 def case_id(prim, p):
     return f"{prim} {json.dumps(p, separators=(',', ':'))}"
 
@@ -1736,7 +1850,11 @@ def write_lean(path, items, split):
     where = {}
     for idx, (cid, asserts) in items:
         lines.append(f"-- {cid}")
-        for group in ([a] for a in asserts) if split else [asserts]:
+        # A domain assertion is an example of its own, so that a violation is told apart.
+        main = [a for a in asserts if not a[0].startswith("domain")]
+        groups = [[a] for a in main] if split else [main] if main else []
+        groups += [[a] for a in asserts if a[0].startswith("domain")]
+        for group in groups:
             if group[0][2] is None:
                 lines.append(group[0][1])
                 where[len(lines)] = (idx, group[0][0])
@@ -1847,7 +1965,13 @@ def main():
             print(f"{f.relative_to(ROOT)}:{line}: {err}", file=sys.stderr)
         print("shapes: Lean errors outside the cases", file=sys.stderr)
         return 1
-    failing = sorted({wheres[f][line][0] for f, errs in results.items() for line in errs})
+    failed = [wheres[f][line] for f, errs in results.items() for line in errs]
+    failing = sorted({i for i, name in failed if not name.startswith("domain")})
+    # A domain violation is a finding only if the case agrees with JAX.
+    findings = {}
+    for i, name in failed:
+        if name.startswith("domain") and i not in failing:
+            findings.setdefault((cases[i][0], name), []).append(i)
     (GEN / "failing.txt").write_text("".join(f"{items[i][1][0]}\n" for i in failing))
     by_prim = {}
     for prim, _ in cases:
@@ -1861,9 +1985,13 @@ def main():
             f"  expected disagreement {key}: {len(idxs)} cases ({EXPECTED[key][0]})"
             + (f", {len(bad)} not as expected" if bad else "")
         )
-    if not failing:
+    new = report_findings(findings, cases, items, {prim for prim, _ in cases})
+    if not failing and not new:
         print("shapes: ok")
         return 0
+    if not failing:
+        print(f"shapes: {new} new domain violations", file=sys.stderr)
+        return 1
 
     # Diagnose: one example per assertion, and the model's shapes.
     diag = GEN / "Diagnose.lean"
