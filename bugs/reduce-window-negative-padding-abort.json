@@ -1,11 +1,26 @@
 {
   "$schema": "../scripts/bug.schema.json",
   "title": "`reduce_window` with a window of size 1 and negative padding aborts the process in XLA",
-  "status": "found",
+  "status": "fixed",
+  "priority": "P0",
   "primitive": "reduce_window_sum",
   "source": "jax/_src/lax/windowed_reductions.py:704",
   "lean_refutation": null,
-  "upstream_issue": null,
+  "upstream_issue": "https://github.com/openxla/xla/issues/48719",
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: reduce_window negative padding",
+      "jax-ml/jax: reduce_window padding negative",
+      "jax-ml/jax: reduce_window in:title",
+      "openxla/xla: reduce_window negative padding"
+    ],
+    "found": [
+      "https://github.com/openxla/xla/issues/48719 (opened 2026-09-11, closed) is this bug.",
+      "https://github.com/openxla/xla/pull/48875 fixed it, imported as https://github.com/openxla/xla/pull/51962 (merged 2026-11-04)."
+    ]
+  },
+  "maybe_intended": null,
   "description": [
     "If every window dimension and stride of `lax.reduce_window` is 1 and negative padding shrinks the operand,",
     "compilation fails a `CHECK` in XLA, which aborts the Python process with `SIGABRT` instead of raising.",
@@ -58,5 +73,6 @@
   "lean": [
     "`reduce_window` is not modelled. `scripts/shapes.py` does not test it."
   ],
-  "jax_version": "0.12.0.1"
+  "jax_version": "0.12.0.1",
+  "fixed_in": "0.12.1"
 }

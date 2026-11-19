@@ -153,7 +153,7 @@ details.caput[open] > summary::before { transform: rotate(90deg); }
 .title { font-size: 1.15rem; font-weight: 500; line-height: 1.4; }
 /* The facts of a bug, in the same columns for every bug. */
 .facts {
-  display: grid; grid-template-columns: 7ch 16ch 8ch 11ch minmax(0, 1fr) 6ch; gap: 0 12px;
+  display: grid; grid-template-columns: 7ch 8ch 16ch 8ch 11ch minmax(0, 1fr) 6ch; gap: 0 12px;
   margin: 6px 0 0; font: 0.68rem/1.45 var(--mono);
 }
 .facts div { min-width: 0; }
@@ -382,6 +382,13 @@ function sections(bug) {
     ["Cause", text(bug.cause)],
     bug.fix && ["Suggested fix", text(bug.fix)],
     ["Lean", text(bug.lean)],
+    bug.maybe_intended && ["Maybe intended", text(bug.maybe_intended)],
+    bug.duplicate_search && ["Duplicate search", text([
+      `Searched on ${bug.duplicate_search.date}:`,
+      bug.duplicate_search.queries.map((q) => `\`${q}\``).join(", ") + ".",
+      "",
+      ...(bug.duplicate_search.found.length ? bug.duplicate_search.found.map((f) => `- ${f}`) : ["Nothing found."]),
+    ])],
     related.length && ["See also", text([`${related.join(", ")}.`])],
   ].filter(Boolean).map(([heading, body]) => `<h3>${heading}</h3>${body}`).join("");
 }
@@ -389,6 +396,7 @@ function render(bug) {
   const none = `<span class="none">–</span>`;
   const facts = [
     ["Status", `<span class="st">${esc(bug.status)}</span>`],
+    ["Priority", esc(bug.priority)],
     ["Primitive", esc(bug.primitive)],
     ["JAX", esc(bug.jax_version) + (bug.fixed_in ? ` → ${esc(bug.fixed_in)}` : "")],
     ["Source", jaxLink(bug)],

@@ -2,10 +2,29 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "The derivatives of `cumlogsumexp` are NaN after two leading `-∞` entries, also for finite outputs",
   "status": "found",
+  "priority": "P1",
   "primitive": "cumlogsumexp",
   "source": "jax/_src/lax/other.py:288",
   "lean_refutation": null,
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: cumlogsumexp",
+      "jax-ml/jax: logaddexp accumulate nan",
+      "jax-ml/jax: logaddexp nan",
+      "jax-ml/jax: logaddexp in:title",
+      "jax-ml/jax: logsumexp nan gradient inf"
+    ],
+    "found": [
+      "https://github.com/jax-ml/jax/issues/1624 (closed 2019): `logaddexp(-inf, -inf)` was NaN. It concerns the value, which is right now, and not the derivative."
+    ]
+  },
+  "maybe_intended": [
+    "The JAX FAQ documents NaN gradients where an intermediate value is not differentiable, as for `jnp.where`.",
+    "A maintainer could count this among them.",
+    "`jax.nn.logsumexp` avoids the NaN at the same input, which speaks against it."
+  ],
   "description": [
     "After two leading `-∞` entries, the derivatives of `lax.cumlogsumexp` contain NaN:",
     "the gradient of the last entry of `cumlogsumexp([-∞, -∞, 1])` is `[nan, nan, 1]`.",

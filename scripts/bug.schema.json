@@ -4,7 +4,7 @@
   "description": "A bug in JAX found with the Lean model. The file name is the identifier of the bug. The fields from title to fix, and jax_version, are the sections of an upstream issue, in this order.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "status", "primitive", "source", "lean_refutation", "upstream_issue", "description", "expected", "reproducer", "cause", "fix", "lean", "jax_version"],
+  "required": ["title", "status", "priority", "primitive", "source", "lean_refutation", "upstream_issue", "duplicate_search", "maybe_intended", "description", "expected", "reproducer", "cause", "fix", "lean", "jax_version"],
   "properties": {
     "$schema": { "type": "string" },
     "title": {
@@ -14,6 +14,10 @@
     "status": {
       "description": "found: the reproducer shows the bug. proven: the reproducer shows the bug, and a Lean theorem refutes our model of the rule. reported: an upstream issue exists. fixed: a JAX release contains a fix.",
       "enum": ["found", "proven", "reported", "fixed"]
+    },
+    "priority": {
+      "description": "A conservative judgment, reviewed before filing. P0: aborts the process, or a silent wrong result on ordinary inputs. P1: a silent wrong result on edge inputs that real code reaches, such as empty arrays, infinities or a jnp function. P2: an exception where a result is expected, or a silent wrong result only on inputs that jnp does not emit. P3: an inconsistency where the behaviour is arguably correct.",
+      "enum": ["P0", "P1", "P2", "P3"]
     },
     "primitive": {
       "description": "The lax primitive, as named in lax.",
@@ -32,6 +36,36 @@
       "description": "The URL of the upstream issue.",
       "type": ["string", "null"],
       "format": "uri"
+    },
+    "duplicate_search": {
+      "description": "The search for an existing upstream issue, repeated before filing. null only if upstream_issue is set and no search was needed to find it.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["date", "queries", "found"],
+      "properties": {
+        "date": {
+          "description": "The day of the search.",
+          "type": "string",
+          "format": "date"
+        },
+        "queries": {
+          "description": "The searches tried, each as `<owner>/<repository>: <query>`, over issues and pull requests.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+: .+$" },
+          "minItems": 1
+        },
+        "found": {
+          "description": "The issues and pull requests found that concern the same code, in Markdown, one per array entry: its URL and how it relates to this bug. Empty if none was found.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "maybe_intended": {
+      "description": "Why a maintainer could call the behaviour intended, in Markdown, one line per array entry, or null if nothing speaks for it. A bug whose expected behaviour rests on our reading and not on a written promise says so here.",
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "minItems": 1
     },
     "description": {
       "description": "What goes wrong, as a user of JAX sees it, in Markdown, one line per array entry: the input that triggers the bug, what JAX does, and which cases are affected. The title, description, expected, reproducer, cause and fix stand alone, as in an upstream issue: they do not mention Lean, the model or files of this repository. scripts/bugs.py checks this.",
@@ -88,6 +122,7 @@
   "allOf": [
     { "if": { "properties": { "status": { "const": "proven" } } }, "then": { "properties": { "lean_refutation": { "type": "string" } } } },
     { "if": { "properties": { "status": { "enum": ["reported", "fixed"] } } }, "then": { "properties": { "upstream_issue": { "type": "string" } } } },
-    { "if": { "properties": { "status": { "const": "fixed" } } }, "then": { "required": ["fixed_in"] } }
+    { "if": { "properties": { "status": { "const": "fixed" } } }, "then": { "required": ["fixed_in"] } },
+    { "if": { "properties": { "upstream_issue": { "type": "null" } } }, "then": { "properties": { "duplicate_search": { "type": "object" } } } }
   ]
 }

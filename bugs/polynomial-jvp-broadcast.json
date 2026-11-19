@@ -2,10 +2,21 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "The JVP of `polynomial` has the wrong shape if the constant coefficient broadcasts `x`",
   "status": "proven",
+  "priority": "P1",
   "primitive": "polynomial",
   "source": "jax/_src/lax/lax.py:5265",
   "lean_refutation": "Jax.Lax.polynomialJvp_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/42480",
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: lax.polynomial"
+    ],
+    "found": [
+      "https://github.com/jax-ml/jax/pull/42488 (open) fixes the upstream issue."
+    ]
+  },
+  "maybe_intended": null,
   "description": [
     "If only the constant coefficient `a_0` of `lax.polynomial(x, coeffs)` is larger than `x` along some axis,",
     "the tangent with respect to `x` has the shape of `x` instead of the shape of the result.",

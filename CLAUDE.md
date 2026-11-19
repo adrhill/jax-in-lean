@@ -17,6 +17,7 @@ Jax.lean, Jax/      # Model of JAX and proofs about it
 │                   # (the six comparisons share Lax/Compare.lean)
 └── Jaxpr/<Name>.lean # Jaxprs of several primitives, e.g. from upstream issues
 Audit.lean          # Axiom check, and the registry of every settled property
+QUESTIONS.md        # Ambiguous semantics and open decisions, with their rulings (gitignored)
 bugs/<name>.json    # One record per JAX bug, with its reproducer
 bugs/CLAUDE.md      # How to write a bug record
 scripts/audit.sh    # Forbidden-token scan, build, Audit.lean, bug reproducers, shapes.py
@@ -35,6 +36,7 @@ lake build           # build and check all proofs
 scripts/audit.sh     # required before every commit
 uv sync              # install the pinned JAX into .venv
 uv run python ...    # run a reproducer against real JAX
+uv run python scripts/bugs.py --jax latest  # run the reproducers on the latest JAX release
 prek install         # once: run ruff and ty from `prek.toml` on every commit
 ```
 
@@ -105,6 +107,9 @@ The pinned JAX source is readable at `.venv/lib/python3.15/site-packages/jax/`.
   Every bug gets a record `bugs/<name>.json` that follows `scripts/bug.schema.json`.
   It reads as a self-contained issue on the JAX repository, as `bugs/CLAUDE.md` describes.
   If the model and real JAX disagree, the model is wrong: fix the model.
+- If two readings of JAX, of its documentation or of these rules are both plausible,
+  write both down as a question in `QUESTIONS.md` and ask the user. Never settle one silently.
+  A ruling of "not a bug" becomes a restated and proven property, and the refutation is registered with the reason.
 - Theorem statements and model definitions are the trusted part and are reviewed by the user.
   Keep them short and readable, and point out new or changed ones when reporting work.
 

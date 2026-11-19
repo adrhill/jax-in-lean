@@ -2,10 +2,27 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "`clamp` has zero derivative with respect to `max` where `x <= max < min`, although its result is `max`",
   "status": "proven",
+  "priority": "P2",
   "primitive": "clamp",
   "source": "jax/_src/lax/lax.py:7781",
   "lean_refutation": "Jax.Lax.clampJvp_not_correct",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: clamp jvp min max",
+      "jax-ml/jax: clip gradient min greater than max",
+      "jax-ml/jax: clip grad min max",
+      "jax-ml/jax: clip gradient in:title",
+      "jax-ml/jax: clamp in:title"
+    ],
+    "found": []
+  },
+  "maybe_intended": [
+    "A maintainer could call `min > max` invalid input, whose derivative is unspecified:",
+    "the docstring of `lax.clamp` already describes another primal there than XLA computes.",
+    "Then the docstring needs the fix and not the JVP rule."
+  ],
   "description": [
     "Where `x <= max < min`, `lax.clamp(min, x, max)` returns `max`,",
     "but forward and reverse mode return 0 for its derivative with respect to `max`.",

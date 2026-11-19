@@ -2,10 +2,26 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "`polynomial` at `x = ±inf` silently returns `inf` or NaN depending on `unroll`",
   "status": "proven",
+  "priority": "P1",
   "primitive": "polynomial",
   "source": "jax/_src/lax/lax.py:5312",
   "lean_refutation": "Jax.Lax.polynomial_unroll_not_independent",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: polyval unroll",
+      "jax-ml/jax: polyval inf nan",
+      "jax-ml/jax: polyval inf",
+      "jax-ml/jax: polyval",
+      "jax-ml/jax: lax.polynomial"
+    ],
+    "found": []
+  },
+  "maybe_intended": [
+    "No document promises a value at `x = ±inf`, and both `inf` and NaN can be argued for.",
+    "A maintainer could read \"does not affect correctness\" as a statement about finite `x` only."
+  ],
   "description": [
     "At `x = ±inf` the result of `lax.polynomial` depends on `unroll`.",
     "With at most `unroll` coefficients (8 by default) it is the infinity that Horner's rule gives,",

@@ -2,10 +2,13 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "The derivative of `pow(x, 0)` with respect to `x` is NaN at `x = 0`",
   "status": "proven",
+  "priority": "P1",
   "primitive": "pow",
   "source": "jax/_src/lax/lax.py:5352",
   "lean_refutation": "Jax.Lax.powJvpLeft_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/20574",
+  "duplicate_search": null,
+  "maybe_intended": null,
   "description": [
     "Forward and reverse mode return NaN for the derivative of `lax.pow(x, 0)` with respect to `x` at `x = 0`.",
     "In turn, the second derivative of `x ↦ x ** 1` at 0 is NaN,",

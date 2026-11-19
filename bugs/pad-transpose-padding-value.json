@@ -1,11 +1,28 @@
 {
   "$schema": "../scripts/bug.schema.json",
   "title": "Reverse mode of `pad` raises when only the scalar fill value `padding_value` is differentiated",
-  "status": "proven",
+  "status": "fixed",
+  "priority": "P2",
   "primitive": "pad",
   "source": "jax/_src/lax/lax.py:8233",
   "lean_refutation": "Jax.Lax.padTranspose_not_correct",
-  "upstream_issue": null,
+  "upstream_issue": "https://github.com/jax-ml/jax/pull/42201",
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: pad constant_values grad",
+      "jax-ml/jax: jnp.pad grad constant_values",
+      "jax-ml/jax: _pad_transpose",
+      "jax-ml/jax: pad transpose",
+      "jax-ml/jax: padding_value",
+      "jax-ml/jax: pad in:title grad"
+    ],
+    "found": [
+      "https://github.com/jax-ml/jax/pull/42201 (merged 2026-10-31) is about `pad` under `shard_map`, and also makes `_pad_transpose` compute the cotangent of the operand whenever `padding_value` is a linear input. No issue reports the bug.",
+      "https://github.com/jax-ml/jax/pull/1079 (merged 2019) fixed the handling of symbolic zeros in the same rule."
+    ]
+  },
+  "maybe_intended": null,
   "description": [
     "`jax.grad` of `lax.pad` with respect to the padding value alone raises a `TypeError`,",
     "and so does `jax.grad` of `jnp.pad` with respect to `constant_values`.",
@@ -76,5 +93,6 @@
     "The domain check of `scripts/shapes.py` finds it in Lean: where only `padding_value` is a linear input,",
     "the transpose rule returns no cotangent."
   ],
-  "jax_version": "0.12.0.1"
+  "jax_version": "0.12.0.1",
+  "fixed_in": "0.12.1"
 }

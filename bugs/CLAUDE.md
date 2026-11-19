@@ -22,7 +22,8 @@ The sections of the issue, in this order:
 The keys of a record follow the order of the schema, which is that of the issue,
 with `lean` and `related` before `jax_version`. `scripts/bugs.py` checks this.
 
-`lean`, `lean_refutation` and `related` appear only on our dashboard, never in the issue.
+`lean`, `lean_refutation`, `related` and the triage fields `priority`, `duplicate_search` and `maybe_intended`
+appear only on our dashboard, never in the issue.
 `lean` is the only field that may mention Lean, the model, theorems or files of this repository.
 `scripts/bugs.py` rejects such references in the other fields.
 To point to another bug, list it in `related` and describe what it does in the text.
@@ -55,6 +56,25 @@ Never write its file name.
   If the fix belongs to XLA, start with "In XLA." and give a workaround in JAX if there is one.
 - **`lean`**: what the model proves about the rule, and which theorem refutes it.
   If it is not modelled, say why in one sentence.
+
+## Triage
+
+Three fields say whether and how urgently a bug is worth an issue. All three are judgments that the user reviews.
+
+- **`priority`**: `P0` to `P3`, on the scale of the schema. Choose the lower priority if in doubt.
+  It depends on how ordinary code reaches the bug, so say in `description` whether `jnp` does.
+- **`duplicate_search`**: search the issues and pull requests of jax-ml/jax for the bug before adding a record,
+  and those of openxla/xla and openxla/stablehlo if the cause is in XLA.
+  Record every query, also those that found nothing, and what was found about the same code.
+  An issue for the same bug goes into `upstream_issue`.
+  Repeat the search before filing and update the date.
+- **`maybe_intended`**: why a maintainer could call the behaviour intended, or `null`.
+  Fill it in whenever `expected` rests on our reading and not on a written promise:
+  a docstring that can be read two ways, an input that only `lax` accepts, a value that no document fixes.
+  A doubt that concerns several records or the model is a question in `../QUESTIONS.md` instead.
+
+Before filing, also run the reproducers on the latest release, `uv run python scripts/bugs.py --jax latest`.
+If a bug no longer shows there, find the change that fixed it, and set `status`, `fixed_in` and `upstream_issue`.
 
 ## Reproducer
 

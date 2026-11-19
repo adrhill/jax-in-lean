@@ -2,10 +2,23 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "Reverse mode of `broadcast_in_dim` raises for non-increasing `broadcast_dimensions`",
   "status": "proven",
+  "priority": "P2",
   "primitive": "broadcast_in_dim",
   "source": "jax/_src/lax/lax.py:7543",
   "lean_refutation": "Jax.Lax.broadcastInDimTranspose_not_correct",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: broadcast_in_dim grad ValueError",
+      "jax-ml/jax: broadcast_in_dim transpose",
+      "jax-ml/jax: broadcast_in_dim in:title"
+    ],
+    "found": [
+      "https://github.com/jax-ml/jax/pull/5282 (merged 2020) and https://github.com/jax-ml/jax/pull/34877 (merged 2026-02) fixed other cases of the same transpose rule. This case is present after both."
+    ]
+  },
+  "maybe_intended": null,
   "description": [
     "Reverse mode of `lax.broadcast_in_dim` raises a `ValueError` if `broadcast_dimensions` is not increasing,",
     "because the transpose rule returns a cotangent of the wrong shape.",

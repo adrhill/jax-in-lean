@@ -2,10 +2,24 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "`vmap` of `clamp` raises if only `max` is batched and `min` and the operand are scalars",
   "status": "proven",
+  "priority": "P2",
   "primitive": "clamp",
   "source": "jax/_src/lax/lax.py:7766",
   "lean_refutation": "Jax.Lax.clampBatch_not_correct",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: clamp vmap",
+      "jax-ml/jax: vmap clip scalar",
+      "jax-ml/jax: lax.clamp",
+      "jax-ml/jax: clamp in:title"
+    ],
+    "found": [
+      "https://github.com/jax-ml/jax/issues/5325 (closed 2021): `vmap` of `lax.clamp` raised with all three arguments batched. That case works now, this one was not part of it."
+    ]
+  },
+  "maybe_intended": null,
   "description": [
     "`vmap` of `lax.clamp` over `max` alone raises a `TypeError` if `min` and the operand are scalars.",
     "It works if `min` is batched, with or without `max`, and if the operand is not a scalar."

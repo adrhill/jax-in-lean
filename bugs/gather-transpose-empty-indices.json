@@ -2,10 +2,24 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "Reverse mode of `gather` raises for empty indices and slices larger than the operand",
   "status": "proven",
+  "priority": "P2",
   "primitive": "gather",
   "source": "jax/_src/lax/slicing.py:1961",
   "lean_refutation": "Jax.Lax.gatherTranspose_not_defined",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: gather transpose empty indices",
+      "jax-ml/jax: gather empty grad",
+      "jax-ml/jax: gather in:title grad"
+    ],
+    "found": []
+  },
+  "maybe_intended": [
+    "The expected behaviour rests on `lax.gather` accepting the input, not on a written promise.",
+    "A maintainer could instead make the shape rule reject slices larger than the operand for empty indices too."
+  ],
   "description": [
     "If the indices of `lax.gather` are empty and the slices are larger than the operand,",
     "reverse mode raises a `TypeError`.",

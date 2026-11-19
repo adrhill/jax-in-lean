@@ -2,10 +2,28 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "A scatter with empty index vectors is silently computed elementwise if the updates have the shape of the operand",
   "status": "found",
+  "priority": "P2",
   "primitive": "scatter_add",
   "source": "jax/_src/lax/slicing.py:3437",
   "lean_refutation": null,
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: scatter_dims_to_operand_dims empty",
+      "jax-ml/jax: scatter empty",
+      "jax-ml/jax: scatter in:title empty",
+      "openxla/xla: scatter empty scatter_dims_to_operand_dims",
+      "openxla/xla: scatter in:title",
+      "openxla/stablehlo: scatter empty scatter_dims_to_operand_dims",
+      "openxla/stablehlo: scatter empty indices"
+    ],
+    "found": []
+  },
+  "maybe_intended": [
+    "The expected behaviour is that of the StableHLO spec and of its reference interpreter.",
+    "`jnp` is not known to emit such a scatter, so a maintainer could call the input unsupported."
+  ],
   "description": [
     "If `scatter_dims_to_operand_dims` is empty and the updates have the shape of the operand,",
     "`lax.scatter_add` silently returns `operand + updates`.",

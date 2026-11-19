@@ -956,6 +956,7 @@ def jax_record(case):
             # The position that every entry of the updates is added to:
             # update `k` is `2 ** k`, so the result lists the updates of every position in binary.
             # `bugs/scatter-empty-index-vector-elementwise.json`: XLA computes this case elementwise.
+            # The model follows the spec there, so the check skips it: Q1 of `QUESTIONS.md`.
             elementwise = not p["dn"][2] and su == so
             size = math.prod(su)
             if 0 < size <= 24 and math.prod(so) > 0 and not elementwise:

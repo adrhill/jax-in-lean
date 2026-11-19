@@ -2,10 +2,23 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "Differentiating `clamp` with respect to a scalar bound of an array raises",
   "status": "proven",
+  "priority": "P2",
   "primitive": "clamp",
   "source": "jax/_src/lax/lax.py:7775",
   "lean_refutation": "Jax.Lax.clampJvpScalar_not_defined",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: lax.clamp grad scalar",
+      "jax-ml/jax: clamp jvp min max",
+      "jax-ml/jax: clamp grad",
+      "jax-ml/jax: lax.clamp",
+      "jax-ml/jax: clamp in:title"
+    ],
+    "found": []
+  },
+  "maybe_intended": null,
   "description": [
     "If the operand `x` of `lax.clamp` is an array and a bound is a scalar,",
     "forward and reverse mode with respect to that bound raise a `TypeError`.",

@@ -2,10 +2,22 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "`broadcast_in_dim` skips the transpose if the result shape equals the operand shape",
   "status": "proven",
+  "priority": "P2",
   "primitive": "broadcast_in_dim",
   "source": "jax/_src/lax/lax.py:7583",
   "lean_refutation": "Jax.Lax.broadcastInDimFwd_not_correct",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: broadcast_in_dim broadcast_dimensions transpose",
+      "jax-ml/jax: broadcast_in_dim forwarding",
+      "jax-ml/jax: broadcast_in_dim transpose",
+      "jax-ml/jax: broadcast_in_dim in:title"
+    ],
+    "found": []
+  },
+  "maybe_intended": null,
   "description": [
     "If the result of `lax.broadcast_in_dim` has the shape of the operand, as for a square matrix,",
     "JAX silently returns the operand, even if `broadcast_dimensions` permutes its axes.",

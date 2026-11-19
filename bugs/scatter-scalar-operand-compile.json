@@ -2,10 +2,30 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "Scattering several updates into a scalar fails to compile, and so does `grad` of the matching `gather`",
   "status": "found",
+  "priority": "P2",
   "primitive": "scatter_add",
   "source": "jax/_src/lax/slicing.py:3437",
   "lean_refutation": null,
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: scatter scalar operand INTERNAL",
+      "jax-ml/jax: scatter scalar",
+      "jax-ml/jax: scatter in:title scalar",
+      "jax-ml/jax: gather grad scalar operand",
+      "openxla/xla: ScatterSimplifier scalar operand",
+      "openxla/xla: ScatterSimplifier",
+      "openxla/xla: scatter in:title"
+    ],
+    "found": [
+      "https://github.com/openxla/xla/pull/45584 (merged 2026-07) fixed a crash of `GatherSimplifier` on a gather from a scalar. It does not touch the scatter."
+    ]
+  },
+  "maybe_intended": [
+    "`jnp` only emits a single update into a scalar, so a maintainer could call several updates unsupported.",
+    "The matching `gather` is accepted and differentiates in forward mode, which speaks against it."
+  ],
   "description": [
     "Scattering several updates into a scalar with `lax.scatter_add` fails to compile with an internal error of XLA,",
     "and so does `jax.grad` of the matching `lax.gather`, whose transpose rule is that scatter.",

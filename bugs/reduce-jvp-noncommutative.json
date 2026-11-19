@@ -2,10 +2,13 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "The JVP of `reduce` reorders the entries, so it is wrong for a non-commutative monoid",
   "status": "proven",
+  "priority": "P2",
   "primitive": "reduce",
   "source": "jax/_src/lax/lax.py:9122",
   "lean_refutation": "Jax.Lax.reduceJvp_not_correct",
   "upstream_issue": "https://github.com/jax-ml/jax/issues/32474",
+  "duplicate_search": null,
+  "maybe_intended": null,
   "description": [
     "For an associative `computation` that is not commutative,",
     "the JVP rule of `lax.reduce` returns a wrong primal and a wrong tangent.",

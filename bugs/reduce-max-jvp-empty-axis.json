@@ -2,10 +2,23 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "Forward mode of `reduce_max` over an empty axis returns NaN, which reaches `jacfwd` of `jnp.max(..., initial=...)`",
   "status": "proven",
+  "priority": "P1",
   "primitive": "reduce_max",
   "source": "jax/_src/lax/lax.py:9321",
   "lean_refutation": "Jax.Jaxpr.maxInitialJvp_not_correct",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: max initial jacfwd nan empty",
+      "jax-ml/jax: jacfwd nan max initial",
+      "jax-ml/jax: reduce_max jvp empty axis",
+      "jax-ml/jax: empty array grad max",
+      "jax-ml/jax: empty in:title max"
+    ],
+    "found": []
+  },
+  "maybe_intended": null,
   "description": [
     "Forward mode of `reduce_max` and `reduce_min` over an axis of size 0 returns NaN,",
     "which `jnp.max` and `jnp.min` with `initial` reach.",

@@ -2,10 +2,24 @@
   "$schema": "../scripts/bug.schema.json",
   "title": "Reverse mode of `scatter_add` with respect to the updates raises for an empty operand",
   "status": "proven",
+  "priority": "P2",
   "primitive": "scatter_add",
   "source": "jax/_src/lax/slicing.py:2906",
   "lean_refutation": "Jax.Lax.scatterAddTranspose_not_correct",
   "upstream_issue": null,
+  "duplicate_search": {
+    "date": "2026-11-19",
+    "queries": [
+      "jax-ml/jax: segment_sum num_segments grad empty",
+      "jax-ml/jax: segment_sum grad",
+      "jax-ml/jax: segment_sum in:title",
+      "jax-ml/jax: scatter_add transpose empty operand",
+      "jax-ml/jax: scatter empty",
+      "jax-ml/jax: scatter in:title empty"
+    ],
+    "found": []
+  },
+  "maybe_intended": null,
   "description": [
     "If `x` has size 0 on an indexed axis, `jax.grad` of `x.at[idx].add(u)` with respect to `u` raises a `TypeError`.",
     "The same holds for `.at[idx].subtract(u)` and for `jax.ops.segment_sum` with `num_segments=0`.",
